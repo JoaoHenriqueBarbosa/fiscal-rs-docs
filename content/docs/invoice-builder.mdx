@@ -8,30 +8,16 @@ O `InvoiceBuilder` usa o padrão **typestate** para garantir em tempo de compila
 ## Ciclo de vida
 
 <Mermaid chart={`
-stateDiagram-v2
-    [*] --> Draft : InvoiceBuilder::new()
-    Draft --> Draft : .series() / .add_item() / .recipient() / ...
-    Draft --> Built : .build()
-    Built --> Signed : .sign_with(closure)
-    Signed --> [*] : .signed_xml()
-
-    state Draft {
-        [*] --> Configuração
-        Configuração : Campos do emissor, itens,
-        Configuração : pagamentos, transporte, etc.
-    }
-
-    state Built {
-        [*] --> XMLGerado
-        XMLGerado : Chave de acesso calculada
-        XMLGerado : XML unsigned disponível
-    }
-
-    state Signed {
-        [*] --> XMLAssinado
-        XMLAssinado : XML-DSig RSA-SHA1 C14N
-        XMLAssinado : Pronto para transmissão
-    }
+flowchart TD
+    A["InvoiceBuilder::new()"] --> B["Draft"]
+    B -->|".series() / .add_item() / ..."| B
+    B -->|".build()"| C{"Validacao ok?"}
+    C -->|Err| D["FiscalError"]
+    C -->|Ok| E["Built"]
+    E -->|".sign_with(fn)"| F{"Assinatura ok?"}
+    F -->|Err| G["FiscalError"]
+    F -->|Ok| H["Signed"]
+    H -->|".signed_xml()"| I["XML pronto para SEFAZ"]
 `} />
 
 ## Criando uma NF-e
