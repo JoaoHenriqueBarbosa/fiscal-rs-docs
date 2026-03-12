@@ -5,14 +5,31 @@ description: Suítes de teste, categorias, padrões utilizados e como executar
 
 ## Visão Geral
 
-O fiscal-rs possui **692+ testes de integração** distribuídos em 16 arquivos de teste, além de **5 alvos de fuzzing**. A maioria dos testes foi portada diretamente das suítes PHP ([sped-nfe](https://github.com/nfephp-org/sped-nfe)) e TypeScript do FinOpenPOS, garantindo paridade funcional entre as implementações.
+O fiscal-rs possui **739+ testes** distribuídos em 16 arquivos de teste, além de **5 alvos de fuzzing**. A maioria dos testes foi portada diretamente das suítes PHP ([sped-nfe](https://github.com/nfephp-org/sped-nfe)) e TypeScript do FinOpenPOS, garantindo paridade funcional entre as implementações.
+
+## Contribuição upstream ao sped-nfe
+
+Durante o desenvolvimento do fiscal-rs, não apenas portamos os testes existentes — **contribuímos 370 novos testes de volta ao sped-nfe original** via [PR #1313](https://github.com/nfephp-org/sped-nfe/pull/1313) (mergeado), elevando a cobertura de **40% para 86,5%** (de 216 para 586 testes, de 896 para 2.274 assertions).
+
+Os 5 arquivos contribuídos:
+
+| Arquivo | Testes | Cobertura |
+|---------|--------|-----------|
+| `TaxCoverageTest.php` | 121 | Todos os branches ICMS CST/CSOSN, FCP, PIS/COFINS |
+| `RenderCoverageTest.php` | 26 | NF-e/NFC-e render(), totais, transporte, pagamentos |
+| `CommunicationCoverageTest.php` | 75 | Todos os métodos SEFAZ via SoapFake, QRCode, eventos |
+| `TraitsCoverageTest.php` | 72 | Todos os traits que estavam com 0% de cobertura |
+| `DeepCoverageTest.php` | 76 | Make render branches, Tools methods, edge cases |
+
+Esse processo revelou **bugs latentes** no sped-nfe que existiam há anos e foram corrigidos no caminho. Não é só paridade — é evolução mútua.
 
 | Métrica | Valor |
 |---------|-------|
-| Testes de integração | 692+ |
+| Testes no fiscal-rs | 739+ |
 | Arquivos de teste | 16 |
 | Alvos de fuzzing | 5 |
-| Linhas de código de teste | ~13.500 |
+| Testes contribuídos ao sped-nfe | 370 |
+| Cobertura sped-nfe (antes → depois) | 40% → 86,5% |
 | Fixtures (XML, certificados, schemas, TXT) | 4 diretórios |
 
 ---

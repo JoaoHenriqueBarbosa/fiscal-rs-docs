@@ -28,6 +28,7 @@
     "txt-conversion",
     "standardize",
     "---Avançado---",
+    "benchmarks",
     "ci-pipeline",
     "testing",
     "ffi-bindings",

@@ -197,6 +197,36 @@ export default function HomePage() {
               (centavos como inteiros), typestate pattern no InvoiceBuilder, newtypes validados,
               assinatura XML-DSig nativa sem hacks de child_process.
             </p>
+            <p>
+              No caminho, contribuímos de volta: enviamos{" "}
+              <a href="https://github.com/nfephp-org/sped-nfe/pull/1313" target="_blank" rel="noopener noreferrer" className="text-[#f74c00] hover:underline">
+                370 testes para o sped-nfe original
+              </a>{" "}
+              (PR #1313, mergeado), elevando a cobertura de <strong className="text-[#c9cbcf]">40% para 86,5%</strong>.
+              Durante esse processo, encontramos e corrigimos bugs latentes que estavam lá há anos.
+              Não é só paridade — é evolução mútua.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Social Proof / Numbers ── */}
+      <section className="relative py-20 lg:py-28 border-t border-[#1a1a1a]">
+        <div className="mx-auto max-w-4xl px-6">
+          <div className="grid grid-cols-2 gap-8 md:grid-cols-4">
+            {[
+              { number: "739+", label: "Testes em Rust" },
+              { number: "370", label: "Testes contribuídos ao sped-nfe" },
+              { number: "86,5%", label: "Cobertura no sped-nfe (era 40%)" },
+              { number: "4", label: "Crates no workspace" },
+            ].map((stat, i) => (
+              <div key={i} className="text-center">
+                <div className="text-[32px] font-medium tracking-tight text-white md:text-[40px]">
+                  <span className="gradient-text">{stat.number}</span>
+                </div>
+                <div className="mt-1 text-[13px] text-[#7a7d84]">{stat.label}</div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -252,6 +282,105 @@ export default function HomePage() {
                 <p className="text-[13px] leading-relaxed text-[#7a7d84]">{f.desc}</p>
               </SpotlightCard>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Benchmarks ── */}
+      <section className="relative py-20 lg:py-28 border-t border-[#1a1a1a]">
+        <div className="mx-auto max-w-5xl px-6">
+          <p className="mb-4 text-center text-[13px] font-medium uppercase tracking-[0.2em] text-[#a0522d]">
+            Performance
+          </p>
+          <h2 className="mb-4 text-center text-[28px] font-normal leading-[1.15] tracking-tighter text-white md:text-[36px]">
+            Benchmarks controlados
+          </h2>
+          <p className="mx-auto mb-12 max-w-xl text-center text-[15px] text-[#7a7d84]">
+            Docker containers idênticos: 1 CPU, 512 MB RAM. Mesmas operações, mesmos dados.{" "}
+            <a href="/docs/benchmarks" className="text-[#f74c00] hover:underline">Metodologia completa →</a>
+          </p>
+
+          <div className="overflow-x-auto rounded-xl border border-[#1a1a1a] bg-[#0A0A0B]">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-[#1a1a1a]">
+                  <th className="px-4 py-3 text-left font-medium text-[#94979E]">Operação</th>
+                  <th className="px-4 py-3 text-right font-medium text-[#f74c00]">Rust</th>
+                  <th className="px-4 py-3 text-right font-medium text-[#f5c542]">Bun</th>
+                  <th className="px-4 py-3 text-right font-medium text-[#7A86B8]">PHP</th>
+                  <th className="px-4 py-3 text-right font-medium text-[#94979E]">Rust vs PHP</th>
+                </tr>
+              </thead>
+              <tbody className="text-[#c9cbcf]">
+                {[
+                  { op: "invoice_builder", rust: "27 µs", bun: "49 µs", php: "427 µs", vs: "16x" },
+                  { op: "sign_xml", rust: "996 µs", bun: "1.9 ms", php: "3.4 ms", vs: "3.4x" },
+                  { op: "tag_nested_item", rust: "3.0 µs", bun: "7.0 µs", php: "9.7 µs", vs: "3.2x" },
+                  { op: "serialize_icms00", rust: "829 ns", bun: "1.0 µs", php: "3.3 µs", vs: "4.0x" },
+                  { op: "tag_simple_text", rust: "122 ns", bun: "224 ns", php: "1.0 µs", vs: "8.5x" },
+                  { op: "escape_xml_clean", rust: "40 ns", bun: "111 ns", php: "124 ns", vs: "3.1x" },
+                ].map((row, i) => (
+                  <tr key={i} className="border-b border-[#1a1a1a]/50 hover:bg-[#151617]">
+                    <td className="px-4 py-2.5 font-mono text-[12px]">{row.op}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px] text-[#f74c00]">{row.rust}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px]">{row.bun}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px]">{row.php}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-[12px] text-[#f74c00] font-medium">{row.vs}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Feature comparison ── */}
+      <section className="relative py-20 lg:py-28 border-t border-[#1a1a1a]">
+        <div className="mx-auto max-w-5xl px-6">
+          <p className="mb-4 text-center text-[13px] font-medium uppercase tracking-[0.2em] text-[#a0522d]">
+            Comparação
+          </p>
+          <h2 className="mb-12 text-center text-[28px] font-normal leading-[1.15] tracking-tighter text-white md:text-[36px]">
+            fiscal-rs vs ecossistema Rust existente
+          </h2>
+
+          <div className="overflow-x-auto rounded-xl border border-[#1a1a1a] bg-[#0A0A0B]">
+            <table className="w-full text-[13px]">
+              <thead>
+                <tr className="border-b border-[#1a1a1a]">
+                  <th className="px-4 py-3 text-left font-medium text-[#94979E]">Feature</th>
+                  <th className="px-4 py-3 text-center font-medium text-[#94979E]">nfe</th>
+                  <th className="px-4 py-3 text-center font-medium text-[#94979E]">Rust-Nfe-API</th>
+                  <th className="px-4 py-3 text-center font-medium text-[#94979E]">Fiscalidade</th>
+                  <th className="px-4 py-3 text-center font-medium text-[#f74c00]">fiscal-rs</th>
+                </tr>
+              </thead>
+              <tbody className="text-[#c9cbcf]">
+                {[
+                  { feat: "NF-e (modelo 55)", a: "Structs", b: "Parse", c: "Transmit", d: true },
+                  { feat: "NFC-e (modelo 65)", a: false, b: true, c: "?", d: true },
+                  { feat: "Geração XML 4.00", a: false, b: true, c: false, d: true },
+                  { feat: "SEFAZ mTLS", a: false, b: false, c: true, d: true },
+                  { feat: "Certificado PFX/X.509", a: false, b: false, c: true, d: true },
+                  { feat: "XMLDSig C14N", a: false, b: false, c: true, d: true },
+                  { feat: "Todos os impostos", a: false, b: false, c: false, d: true },
+                  { feat: "Contingência", a: false, b: false, c: false, d: true },
+                  { feat: "QR Code NFC-e", a: false, b: false, c: false, d: true },
+                  { feat: "Eventos (cancel/CCe)", a: false, b: false, c: false, d: true },
+                  { feat: "TXT → XML", a: false, b: false, c: false, d: true },
+                  { feat: "Testes", a: "Few", b: "Some", c: "Some", d: "739+" },
+                ].map((row, i) => (
+                  <tr key={i} className="border-b border-[#1a1a1a]/50 hover:bg-[#151617]">
+                    <td className="px-4 py-2 text-[#c9cbcf]">{row.feat}</td>
+                    {[row.a, row.b, row.c, row.d].map((v, j) => (
+                      <td key={j} className={`px-4 py-2 text-center ${j === 3 ? "text-[#f74c00] font-medium" : ""}`}>
+                        {v === true ? "✓" : v === false ? "—" : v}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </section>

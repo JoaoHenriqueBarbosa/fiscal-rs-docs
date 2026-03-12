@@ -1,0 +1,92 @@
+---
+title: Benchmarks
+description: Comparação de performance entre Rust, Bun/TypeScript e PHP em condições controladas
+---
+
+## Metodologia
+
+Todos os benchmarks rodam em **containers Docker idênticos** com recursos controlados:
+
+| Parâmetro | Valor |
+|-----------|-------|
+| CPU | 1 core (`--cpus=1`) |
+| Memória | 512 MB (`--memory=512m`) |
+| Rust | 1.85 (release mode, LTO) |
+| Bun | latest |
+| PHP | 8.3-cli |
+
+Cada container **clona o repositório correspondente do GitHub**, garantindo reprodutibilidade total. Qualquer pessoa pode rodar:
+
+```bash
+git clone https://github.com/JoaoHenriqueBarbosa/fiscal-rs
+cd fiscal-rs
+./benchmarks/run_all.sh
+```
+
+Os três runtimes testam as **mesmas 12 operações** com os mesmos dados de entrada, mesmas iterações (1M para operações rápidas, 100K para médias, 10K para pesadas), e 10% de warmup.
+
+## Resultados
+
+### Tabela comparativa
+
+| Operação | Rust | Bun | PHP | Rust vs Bun | Rust vs PHP |
+|----------|------|-----|-----|:-----------:|:-----------:|
+| format_cents_2 | 72 ns | 70 ns | 178 ns | ~1x | **2.5x** |
+| format_rate_4 | 125 ns | 60 ns | 64 ns | 0.5x | 0.5x |
+| escape_xml_clean | 40 ns | 111 ns | 124 ns | **2.8x** | **3.1x** |
+| escape_xml_dirty | 87 ns | 4 ns | 154 ns | 0.04x | **1.8x** |
+| tag_simple_text | 122 ns | 224 ns | 1.039 µs | **1.8x** | **8.5x** |
+| get_state_code | 15 ns | 4 ns | 268 ns | 0.3x | **18x** |
+| tag_nested_item | 3.0 µs | 7.0 µs | 9.7 µs | **2.3x** | **3.2x** |
+| serialize_icms00 | 829 ns | 1.021 µs | 3.325 µs | **1.2x** | **4.0x** |
+| create_icms_totals | 0.2 ns | 4 ns | 255 ns | **19x** | **1.277x** |
+| merge_totals_10 | 13 ns | 61 ns | 400 ns | **4.8x** | **31x** |
+| **invoice_builder** | **27 µs** | **49 µs** | **427 µs** | **1.8x** | **16x** |
+| **sign_xml** | **996 µs** | **1.917 ms** | **3.411 ms** | **1.9x** | **3.4x** |
+
+### Gráficos
+
+<BenchmarkFastOps />
+
+<BenchmarkMediumOps />
+
+<BenchmarkHeavyOps />
+
+<BenchmarkSpeedup />
+
+## Análise
+
+### Onde Rust domina
+
+- **Operações pesadas** (invoice builder, sign_xml): Rust é consistentemente **1.8–2x mais rápido que Bun** e **3–16x mais rápido que PHP**. São as operações que mais importam — gerar e assinar uma NF-e.
+- **Criação de structs** (create_icms_totals): 0.2 ns vs 4 ns (Bun) vs 255 ns (PHP). Structs em Rust são alocadas na stack sem GC.
+- **XML nesting** (tag_nested_invoice_item): 3 µs vs 7 µs vs 10 µs. String concatenation em Rust é previsível e sem GC pauses.
+
+### Onde Bun surpreende
+
+- **escape_xml_dirty**: 4 ns no Bun vs 87 ns no Rust. Bun/V8 usa SIMD strings otimizadas para replace de caracteres comuns.
+- **get_state_code**: 4 ns no Bun vs 15 ns no Rust. V8 JIT inline-cachea lookups em objetos pequenos.
+- **format_rate_4**: 60 ns no Bun vs 125 ns no Rust. `Number.toFixed()` do V8 é altamente otimizado.
+
+### Contexto
+
+Bun é impressionantemente rápido para um runtime com GC — em micro-operações ele pode até superar Rust graças ao JIT do V8. Mas nas **operações compostas** que simulam uso real (gerar XML de NF-e, assinar com certificado), Rust mantém vantagem consistente de **1.8–2x**, sem variância de GC e com uso de memória previsível.
+
+A vantagem real do Rust, porém, não está só na velocidade: está na **portabilidade via FFI**. O mesmo código que roda em 27 µs para gerar uma NF-e pode ser chamado de Python, Node.js, WebAssembly, Kotlin e Swift — sem reescrever.
+
+## Reproduzindo
+
+```bash
+# Requisitos: Docker
+./benchmarks/run_all.sh
+
+# Resultados ficam em:
+# benchmarks/results/rust.json
+# benchmarks/results/bun.json
+# benchmarks/results/php.json
+```
+
+Cada Dockerfile clona seu repositório:
+- **Rust**: `github.com/JoaoHenriqueBarbosa/fiscal-rs`
+- **Bun**: `github.com/JoaoHenriqueBarbosa/FinOpenPOS`
+- **PHP**: `github.com/JoaoHenriqueBarbosa/sped-nfe` (branch `benchmarks`)
