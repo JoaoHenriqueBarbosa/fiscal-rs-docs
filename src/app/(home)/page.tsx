@@ -1,8 +1,79 @@
-import { Github, BookOpen, Zap, Shield, Globe, Package } from "lucide-react";
+"use client";
+
+import { Github, BookOpen, Zap, Shield, Globe, Package, ExternalLink } from "lucide-react";
+import { useRef, useState, useCallback, type MouseEvent } from "react";
+
+function SpotlightCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [active, setActive] = useState(false);
+
+  const onMove = useCallback((e: MouseEvent) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  }, []);
+
+  return (
+    <div
+      ref={ref}
+      onMouseMove={onMove}
+      onMouseEnter={() => setActive(true)}
+      onMouseLeave={() => setActive(false)}
+      className={`bento-card relative overflow-hidden rounded-xl p-6 ${className}`}
+      style={{
+        background: active
+          ? `radial-gradient(600px circle at ${pos.x}px ${pos.y}px, rgba(247,76,0,0.06), transparent 40%), linear-gradient(135deg, rgba(17,18,21,0.8), rgba(21,22,23,0.6))`
+          : undefined,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
 
 export default function HomePage() {
   return (
     <div className="noise bg-[#0c0d0d] text-white">
+      {/* ── Header fixo ── */}
+      <header className="fixed top-0 left-0 right-0 z-50 border-b border-[#1a1a1a]/60 bg-[#0c0d0d]/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
+          <a href="/" className="text-[15px] font-semibold tracking-tight text-white">
+            fiscal-rs
+          </a>
+          <nav className="hidden items-center gap-6 sm:flex">
+            <a href="/docs" className="text-[13px] text-[#94979E] transition-colors hover:text-white">
+              Docs
+            </a>
+            <a
+              href="https://docs.rs/fiscal"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[13px] text-[#94979E] transition-colors hover:text-white"
+            >
+              API Reference <ExternalLink size={11} />
+            </a>
+            <a
+              href="https://crates.io/crates/fiscal"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[13px] text-[#94979E] transition-colors hover:text-white"
+            >
+              crates.io <ExternalLink size={11} />
+            </a>
+            <a
+              href="https://github.com/JoaoHenriqueBarbosa/fiscal-rs"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-md border border-[#222] px-3 py-1.5 text-[13px] text-[#94979E] transition-colors hover:border-[#a0522d]/50 hover:text-white"
+            >
+              <Github size={14} /> GitHub
+            </a>
+          </nav>
+        </div>
+      </header>
+
       {/* ── Hero ── */}
       <section className="relative min-h-[100svh] overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[60vh]">
@@ -67,7 +138,7 @@ export default function HomePage() {
             className="mt-8 max-w-lg animate-fade-in-up text-center text-[17px] leading-[1.7] text-[#7a7d84]"
             style={{ animationDelay: "200ms" }}
           >
-            Documentos fiscais brasileiros (NF-e / NFC-e) com a seguranca de tipos
+            Documentos fiscais brasileiros (NF-e / NFC-e) com a segurança de tipos
             e performance do Rust. Uma lib, todos os runtimes via FFI.
           </p>
 
@@ -89,7 +160,7 @@ export default function HomePage() {
               className="inline-flex items-center justify-center gap-2.5 rounded-lg border border-[#222] bg-transparent px-7 py-3.5 text-[15px] font-medium text-[#94979E] transition-all duration-300 hover:border-[#a0522d]/50 hover:text-white"
             >
               <BookOpen size={17} />
-              Documentacao
+              Documentação
             </a>
           </div>
 
@@ -103,7 +174,7 @@ export default function HomePage() {
       <section className="relative py-28 lg:py-36">
         <div className="mx-auto max-w-3xl px-6">
           <p className="mb-4 text-[13px] font-medium uppercase tracking-[0.2em] text-[#a0522d]">
-            A Historia
+            A História
           </p>
           <h2 className="max-w-2xl text-[24px] font-normal leading-[1.3] tracking-tighter text-[#94979E] md:text-[28px] lg:text-[40px]">
             O ecossistema Rust para documentos fiscais brasileiros era{" "}
@@ -111,18 +182,18 @@ export default function HomePage() {
           </h2>
           <div className="mt-10 space-y-6 text-[16px] leading-[1.8] text-[#7a7d84]">
             <p>
-              O <strong className="text-[#c9cbcf]">sped-nfe</strong> em PHP e a referencia do mercado — 2.400+ stars,
-              usado em producao por milhares de empresas no Brasil. Portamos ele primeiro para{" "}
+              O <strong className="text-[#c9cbcf]">sped-nfe</strong> em PHP é a referência do mercado — 2.400+ stars,
+              usado em produção por milhares de empresas no Brasil. Portamos ele primeiro para{" "}
               <strong className="text-[#c9cbcf]">TypeScript</strong> no projeto FinOpenPOS.
             </p>
             <p>
-              Mas a pergunta ficou: e se em vez de manter uma versao por linguagem, a gente escrevesse{" "}
-              <strong className="text-[#f74c00]">uma unica vez em Rust</strong> e exportasse via FFI para
+              Mas a pergunta ficou: e se em vez de manter uma versão por linguagem, a gente escrevesse{" "}
+              <strong className="text-[#f74c00]">uma única vez em Rust</strong> e exportasse via FFI para
               Python, Node.js, WebAssembly, Android, iOS?
             </p>
             <p>
               O <strong className="text-[#c9cbcf]">fiscal-rs</strong> nasceu dessa ideia. Portamos 640+ testes
-              do PHP/TypeScript primeiro, depois implementamos ate todos passarem. Zero float-point drift
+              do PHP/TypeScript primeiro, depois implementamos até todos passarem. Zero float-point drift
               (centavos como inteiros), typestate pattern no InvoiceBuilder, newtypes validados,
               assinatura XML-DSig nativa sem hacks de child_process.
             </p>
@@ -137,7 +208,7 @@ export default function HomePage() {
             Funcionalidades
           </p>
           <h2 className="mb-16 text-center text-[28px] font-normal leading-[1.15] tracking-tighter text-white md:text-[36px]">
-            Tudo que voce precisa para emissao fiscal
+            Tudo que você precisa para emissão fiscal
           </h2>
 
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -145,7 +216,7 @@ export default function HomePage() {
               {
                 icon: <Package size={20} />,
                 title: "NF-e & NFC-e",
-                desc: "Modelos 55 e 65 com builder typestate: Draft → Built → Signed. Erros impossiveis em tempo de compilacao.",
+                desc: "Modelos 55 e 65 com builder typestate: Draft → Built → Signed. Erros impossíveis em tempo de compilação.",
               },
               {
                 icon: <Shield size={20} />,
@@ -160,26 +231,26 @@ export default function HomePage() {
               {
                 icon: <Zap size={20} />,
                 title: "Zero float drift",
-                desc: "Valores monetarios em centavos (i64). Aliquotas em Rate/Rate4. Sem surpresas de ponto flutuante.",
+                desc: "Valores monetários em centavos (i64). Alíquotas em Rate/Rate4. Sem surpresas de ponto flutuante.",
               },
               {
                 icon: <Shield size={20} />,
                 title: "Tipos validados",
-                desc: "TaxId, Gtin, Ncm, Cfop — parse, don't validate. Estados invalidos irrepresentaveis.",
+                desc: "TaxId, Gtin, Ncm, Cfop — parse, don't validate. Estados inválidos irrepresentáveis.",
               },
               {
                 icon: <Globe size={20} />,
                 title: "FFI-ready",
-                desc: "Uma lib Rust → PyO3, napi-rs, wasm-bindgen, UniFFI. Qualquer runtime, uma unica base de codigo.",
+                desc: "Uma lib Rust → PyO3, napi-rs, wasm-bindgen, UniFFI. Qualquer runtime, uma única base de código.",
               },
             ].map((f, i) => (
-              <div key={i} className="bento-card rounded-xl p-6">
+              <SpotlightCard key={i}>
                 <div className="mb-3 inline-flex rounded-lg bg-[#a0522d]/10 p-2 text-[#f74c00]">
                   {f.icon}
                 </div>
                 <h3 className="mb-2 text-[15px] font-medium text-white">{f.title}</h3>
                 <p className="text-[13px] leading-relaxed text-[#7a7d84]">{f.desc}</p>
-              </div>
+              </SpotlightCard>
             ))}
           </div>
         </div>
@@ -239,8 +310,8 @@ export default function HomePage() {
           </h2>
 
           <p className="mx-auto mt-6 max-w-md text-[17px] leading-[1.7] text-[#64676F]">
-            fiscal-rs e open source e aceita contribuicoes.
-            De uma estrela, abra uma issue, ou envie um PR.
+            fiscal-rs é open source e aceita contribuições.
+            Dê uma estrela, abra uma issue, ou envie um PR.
           </p>
 
           <div className="mt-10">
