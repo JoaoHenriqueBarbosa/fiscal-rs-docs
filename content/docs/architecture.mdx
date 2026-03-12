@@ -1,0 +1,162 @@
+---
+title: Arquitetura
+description: Visão geral da arquitetura do fiscal-rs — workspace Cargo, grafo de dependências e padrões de design
+---
+
+## Visão Geral
+
+O `fiscal-rs` é uma biblioteca Rust para emissão de documentos fiscais eletrônicos brasileiros (NF-e modelo 55 e NFC-e modelo 65), seguindo a especificação SEFAZ MOC 4.00. O projeto é organizado como um **workspace Cargo** com três crates internos e um crate fachada que os re-exporta sob um namespace unificado.
+
+## Crates do Workspace
+
+| Crate | Descrição | Dependências externas principais |
+|-------|-----------|----------------------------------|
+| `fiscal-core` | Tipos de domínio, cálculo de impostos, construção de XML, conversão TXT→XML | `quick-xml`, `serde`, `chrono`, `sha1`, `thiserror` |
+| `fiscal-crypto` | Carregamento de certificado digital (PFX) e assinatura XML-DSig | `openssl`, `base64`, `sha1`, `chrono` |
+| `fiscal-sefaz` | URLs SEFAZ, builders de requisição SOAP, parsers de resposta, client HTTP async | `chrono`, `reqwest` (feature-gated) |
+| `fiscal` | **Fachada** — re-exporta todos os crates acima sob `use fiscal::...` | `fiscal-core`, `fiscal-crypto`, `fiscal-sefaz` |
+
+## Grafo de Dependências
+
+<Mermaid chart={`graph TD
+    fiscal["fiscal (fachada)"]
+    core["fiscal-core"]
+    crypto["fiscal-crypto"]
+    sefaz["fiscal-sefaz"]
+
+    fiscal --> core
+    fiscal --> crypto
+    fiscal --> sefaz
+    crypto --> core
+    sefaz --> core
+
+    style fiscal fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style core fill:#50b86c,stroke:#2e7d42,color:#fff
+    style crypto fill:#e8a838,stroke:#b07e1e,color:#fff
+    style sefaz fill:#d94a6e,stroke:#8a2c42,color:#fff
+`} />
+
+O `fiscal-core` é o alicerce: tanto `fiscal-crypto` quanto `fiscal-sefaz` dependem dele, mas **não dependem um do outro**. Isso significa que um consumidor que não precisa de assinatura digital pode usar apenas `fiscal-core` + `fiscal-sefaz`, e vice-versa.
+
+## Arquitetura em Camadas
+
+<Mermaid chart={`graph TB
+    subgraph facade["Crate Fachada — fiscal"]
+        reexport["pub use fiscal_core::*
+pub mod certificate { pub use fiscal_crypto::... }
+pub mod sefaz { pub use fiscal_sefaz::... }"]
+    end
+
+    subgraph shell["Imperative Shell — I/O e efeitos colaterais"]
+        sefaz_layer["fiscal-sefaz
+URLs, SOAP, client HTTP async (reqwest + mTLS)"]
+        crypto_layer["fiscal-crypto
+OpenSSL, carregamento PFX, assinatura XML-DSig"]
+    end
+
+    subgraph fcore["Functional Core — lógica pura, sem I/O"]
+        types["types, newtypes
+TaxId, Gtin, Ncm, Cfop, Cents, Rate"]
+        tax["tax_icms, tax_pis_cofins_ipi,
+tax_issqn, tax_is, tax_element"]
+        xml["xml_builder (typestate),
+xml_utils, complement, qrcode"]
+        util["format_utils, state_codes,
+status_codes, gtin, convert"]
+    end
+
+    facade --> shell
+    facade --> fcore
+    shell --> fcore
+
+    style facade fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style shell fill:#e8a838,stroke:#b07e1e,color:#fff
+    style fcore fill:#50b86c,stroke:#2e7d42,color:#fff
+`} />
+
+## Padrão: Functional Core, Imperative Shell
+
+O `fiscal-rs` adota o padrão **Functional Core, Imperative Shell** — uma separação disciplinada entre lógica pura e efeitos colaterais:
+
+### Functional Core (`fiscal-core`)
+
+O núcleo contém **toda a lógica de domínio** e é inteiramente puro:
+
+- **Sem I/O**: nenhuma operação de rede, disco ou sistema operacional.
+- **Sem `unsafe`**: todo código é verificado pelo compilador.
+- **Determinístico**: dadas as mesmas entradas, produz as mesmas saídas — ideal para testes unitários e property-based testing.
+- **Parse, don't validate**: os newtypes (`TaxId`, `Gtin`, `Ncm`, `Cfop`, `Cents`, `Rate`) validam no momento da construção e são impossíveis de criar em estado inválido.
+
+Exemplos concretos:
+- O módulo `tax_icms` recebe dados estruturados e retorna um `TaxElement` com os campos XML — nunca toca em rede nem em arquivos.
+- O `InvoiceBuilder` usa o padrão **typestate** (`Draft` → `Built` → `Signed`) para garantir em tempo de compilação que um documento não pode ser transmitido antes de ser assinado.
+
+### Imperative Shell (`fiscal-crypto` + `fiscal-sefaz`)
+
+A casca imperativa encapsula todos os efeitos colaterais:
+
+- **`fiscal-crypto`**: chama OpenSSL para extrair chaves de certificados `.pfx` e assinar XML.
+- **`fiscal-sefaz`**: faz requisições HTTP async via `reqwest` com mTLS para os webservices da SEFAZ.
+
+Essa separação permite que o core seja compilado e testado sem OpenSSL instalado e sem acesso à rede.
+
+### Traits Selados
+
+Os traits públicos `TaxCalculation` e `XmlSerializable` usam o **sealed trait pattern** — são públicos para chamada mas não podem ser implementados fora do crate. Isso garante que a lista de implementadores é conhecida e exaustiva, permitindo evolução sem quebra de API.
+
+```rust
+// O trait é público, mas exige Sealed como supertrait
+pub trait TaxCalculation: Sealed {
+    fn build_xml(&self) -> String;
+}
+
+// Sealed é pub(crate), impossível de implementar externamente
+pub(crate) trait Sealed {}
+```
+
+## Por que um Workspace?
+
+A decisão de separar o projeto em múltiplos crates dentro de um workspace traz benefícios concretos:
+
+### 1. Publicação Independente
+
+Cada crate pode ser publicado separadamente no [crates.io](https://crates.io). Um projeto que só precisa gerar XML fiscal pode depender de `fiscal-core` sem arrastar OpenSSL ou `reqwest` como dependências transitivas.
+
+### 2. Compilação Mais Rápida
+
+O Cargo compila crates em paralelo quando não há dependência entre eles. Como `fiscal-crypto` e `fiscal-sefaz` são independentes entre si, são compilados simultaneamente — reduzindo o tempo total de build.
+
+### 3. Alvos FFI e WebAssembly
+
+O `fiscal-core` não depende de OpenSSL nem de I/O de rede, tornando-o ideal para:
+- **FFI (C/C++/Python/Node.js)**: expor funções de cálculo de impostos e geração de XML via `cbindgen` ou `pyo3` sem arrastar uma pilha TLS.
+- **WebAssembly**: compilar para `wasm32-unknown-unknown` para uso em navegadores ou edge functions.
+
+### 4. Features Opcionais
+
+O `fiscal-sefaz` usa uma feature `client` (habilitada por padrão) que controla a dependência do `reqwest`. Desabilitar essa feature permite usar apenas os builders de requisição e parsers de resposta, sem o client HTTP — útil para ambientes que já possuem sua própria camada de transporte.
+
+```toml
+# Usar fiscal-sefaz sem o client HTTP
+[dependencies]
+fiscal-sefaz = { version = "0.1", default-features = false }
+```
+
+## Crate Fachada
+
+O crate raiz `fiscal` é apenas uma fachada de conveniência. Ele re-exporta tudo para que consumidores finais possam usar um único `use fiscal::...`:
+
+```rust
+// src/lib.rs do crate fiscal
+pub use fiscal_core::*;
+
+pub mod certificate {
+    pub use fiscal_crypto::certificate::*;
+}
+
+pub mod sefaz {
+    pub use fiscal_sefaz::*;
+}
+```
+
+Consumidores que precisam de controle fino podem depender diretamente dos crates internos. Consumidores que querem simplicidade dependem apenas de `fiscal`.

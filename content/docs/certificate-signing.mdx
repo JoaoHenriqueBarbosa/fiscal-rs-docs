@@ -1,0 +1,399 @@
+---
+title: Assinatura Digital (Deep Dive)
+description: Guia aprofundado sobre o processo de assinatura XML-DSig no fiscal-rs -- carregamento de PFX, canonicalização C14N, construção do SignedInfo e assinatura RSA-SHA1.
+---
+
+Notas fiscais eletrônicas brasileiras (NF-e / NFC-e) exigem assinatura digital com certificado A1 e-CNPJ no padrão **XML-DSig** (XML Digital Signature). O crate `fiscal-crypto` implementa todo o processo: extração de chaves do PFX, canonicalização C14N, hash SHA-1, assinatura RSA-SHA1, e montagem do bloco `<Signature>`.
+
+## Carregamento do certificado PFX
+
+### O formato PKCS#12 (PFX)
+
+O certificado digital A1 brasileiro é distribuído como um arquivo `.pfx` (PKCS#12), um container binário que embala:
+
+- **Chave privada RSA** -- usada para assinar o XML
+- **Certificado X.509** -- contém a chave pública, CN (nome da empresa + CNPJ), validade e cadeia de certificação
+- **Cadeia de CAs** (opcional) -- certificados intermediários da ICP-Brasil
+
+### `load_certificate` -- extração PEM
+
+A função `load_certificate` recebe o buffer binário do PFX e a senha, e retorna um `CertificateData` com as strings PEM extraídas:
+
+```rust
+use fiscal::certificate::load_certificate;
+
+let pfx_bytes = std::fs::read("certificado.pfx")?;
+let cert_data = load_certificate(&pfx_bytes, "minha_senha")?;
+
+// Campos disponíveis:
+// cert_data.private_key   -- chave privada PEM (PKCS#8)
+// cert_data.certificate   -- certificado X.509 PEM
+// cert_data.pfx_buffer    -- buffer PFX original (para reutilização)
+// cert_data.passphrase    -- senha (para reutilização)
+```
+
+Internamente, o processo é:
+
+1. Decodifica o buffer DER com `Pkcs12::from_der()`
+2. Parseia com a senha via `pkcs12.parse2(passphrase)`
+3. Extrai a chave privada e exporta para PEM PKCS#8
+4. Extrai o certificado X.509 e exporta para PEM
+5. Retorna tudo encapsulado em `CertificateData`
+
+Qualquer falha retorna `FiscalError::Certificate` com mensagem descritiva (PFX inválido, senha incorreta, chave ausente, etc.).
+
+### `get_certificate_info` -- metadados X.509
+
+Para exibir informações do certificado na UI sem expor a chave privada:
+
+```rust
+use fiscal::certificate::get_certificate_info;
+
+let info = get_certificate_info(&pfx_bytes, "minha_senha")?;
+
+println!("Titular:   {}", info.common_name);     // "EMPRESA LTDA:12345678000199"
+println!("Emissora:  {}", info.issuer);           // "AC SOLUTI"
+println!("Válido de: {}", info.valid_from);       // 2024-01-15
+println!("Válido até:{}", info.valid_until);      // 2025-01-15
+println!("Serial:    {}", info.serial_number);    // hex string
+```
+
+O `CertificateInfo` retornado contém:
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `common_name` | `String` | CN do subject (nome da empresa + documento) |
+| `valid_from` | `NaiveDate` | Data de início de validade (`notBefore`) |
+| `valid_until` | `NaiveDate` | Data de expiração (`notAfter`) |
+| `serial_number` | `String` | Número serial em hexadecimal |
+| `issuer` | `String` | CN da Autoridade Certificadora emissora |
+
+## O processo de assinatura XML-DSig
+
+A especificação MOC 4.00 da NF-e exige assinatura XML-DSig envelopada ("enveloped signature"). O `fiscal-crypto` implementa os 11 passos desse processo em `sign_xml_generic`.
+
+### Diagrama do processo
+
+```mermaid
+sequenceDiagram
+    participant App as Aplicação
+    participant Sign as sign_xml()
+    participant C14N as Canonicalização
+    participant SHA as SHA-1
+    participant RSA as RSA-SHA1
+    participant PEM as OpenSSL (PEM)
+
+    App->>Sign: xml, private_key, certificate
+
+    Note over Sign: Passo 1-2: Localizar elemento assinado
+    Sign->>Sign: extract_element_id(xml, "infNFe")
+    Sign->>Sign: extract_element(xml, "infNFe")
+
+    Note over Sign: Passo 3: Enveloped-signature transform
+    Sign->>Sign: remove_signature_element()
+
+    Note over Sign,C14N: Passo 4: Canonicalizar o elemento
+    Sign->>C14N: canonicalize_xml(infNFe)
+    C14N-->>Sign: XML canônico
+
+    Note over Sign,SHA: Passo 5: Digest SHA-1
+    Sign->>SHA: hash do XML canônico
+    SHA-->>Sign: DigestValue (Base64)
+
+    Note over Sign: Passo 6-7: Construir e canonicalizar SignedInfo
+    Sign->>Sign: build_signed_info(id, digest)
+    Sign->>C14N: canonicalize_xml(SignedInfo)
+    C14N-->>Sign: SignedInfo canônico
+
+    Note over Sign,RSA: Passo 8: Assinar com RSA-SHA1
+    Sign->>PEM: parse private_key PEM
+    PEM-->>RSA: PKey
+    Sign->>RSA: sign(SignedInfo canônico)
+    RSA-->>Sign: SignatureValue (Base64)
+
+    Note over Sign: Passo 9-11: Montar e inserir Signature
+    Sign->>Sign: extract_cert_base64()
+    Sign->>Sign: build_signature_element()
+    Sign->>Sign: inserir antes de &lt;/NFe&gt;
+
+    Sign-->>App: XML assinado completo
+```
+
+### Passo a passo detalhado
+
+#### 1. Extrair o Id do elemento assinado
+
+O algoritmo localiza o atributo `Id` no elemento `<infNFe>`:
+
+```xml
+<infNFe Id="NFe35240512345678000199550010000000011234567890" versao="4.00">
+```
+
+O valor `NFe35...890` será usado como referência (`URI="#NFe35...890"`) no `<Reference>` do `<SignedInfo>`.
+
+#### 2. Extrair o conteúdo do elemento
+
+O conteúdo completo de `<infNFe>...</infNFe>` (incluindo a tag de abertura e fechamento) é extraído do XML.
+
+#### 3. Transform: enveloped-signature
+
+Se já existir um bloco `<Signature>` dentro do conteúdo (reassinatura), ele é removido. Isso implementa a transform `enveloped-signature` do padrão XML-DSig -- o digest deve ser calculado sobre o conteúdo **sem** a assinatura.
+
+#### 4. Canonicalização C14N
+
+O conteúdo é canonicalizado segundo o algoritmo [C14N 1.0](http://www.w3.org/TR/2001/REC-xml-c14n-20010315) (sem comentários). A canonicalização garante que variações irrelevantes de formatação (declaração XML, espaços em branco, ordem de atributos) não afetem o hash.
+
+Na prática, como o XML da NF-e é gerado programaticamente sem espaços extras, a canonicalização se resume a:
+- Remover a declaração `<?xml ... ?>` se presente
+- Normalizar whitespace residual
+
+#### 5. Digest SHA-1
+
+O hash SHA-1 do XML canônico é calculado e codificado em Base64. Esse valor será o `<DigestValue>` no bloco `<Reference>`.
+
+```rust
+let mut hasher = Sha1::new();
+hasher.update(canonical.as_bytes());
+let digest = BASE64.encode(hasher.finalize());
+```
+
+#### 6. Construção do `<SignedInfo>`
+
+O `<SignedInfo>` é o "manifesto" que descreve o que foi assinado e como:
+
+```xml
+<SignedInfo xmlns="http://www.w3.org/2000/09/xmldsig#">
+  <CanonicalizationMethod
+    Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315" />
+  <SignatureMethod
+    Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1" />
+  <Reference URI="#NFe35...890">
+    <Transforms>
+      <Transform
+        Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature" />
+      <Transform
+        Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315" />
+    </Transforms>
+    <DigestMethod
+      Algorithm="http://www.w3.org/2000/09/xmldsig#sha1" />
+    <DigestValue>aBcDeFgHiJkLmNoPqRsTuVwXyZ0=</DigestValue>
+  </Reference>
+</SignedInfo>
+```
+
+#### 7. Canonicalização do `<SignedInfo>`
+
+O próprio `<SignedInfo>` é canonicalizado antes de ser assinado. Isso garante que o verificador possa reproduzir exatamente o mesmo byte-stream para validar a assinatura.
+
+#### 8. Assinatura RSA-SHA1
+
+A chave privada PEM é parseada via OpenSSL, e o `<SignedInfo>` canônico é assinado com RSA-SHA1:
+
+```rust
+let pkey = PKey::private_key_from_pem(private_key_pem.as_bytes())?;
+let mut signer = Signer::new(MessageDigest::sha1(), &pkey)?;
+signer.update(canonical_signed_info.as_bytes())?;
+let signature_bytes = signer.sign_to_vec()?;
+let signature_value = BASE64.encode(&signature_bytes);
+```
+
+O resultado é o `<SignatureValue>` codificado em Base64.
+
+#### 9. Extração do certificado Base64
+
+Os cabeçalhos PEM (`-----BEGIN CERTIFICATE-----` / `-----END CERTIFICATE-----`) são removidos e o conteúdo Base64 é extraído para inclusão no `<X509Certificate>`.
+
+#### 10-11. Montagem e inserção do `<Signature>`
+
+O bloco `<Signature>` completo é montado e inserido dentro do elemento pai (`<NFe>` ou `<evento>`), imediatamente antes da tag de fechamento:
+
+```xml
+<NFe xmlns="http://www.portalfiscal.inf.br/nfe">
+  <infNFe Id="NFe35..." versao="4.00">
+    <!-- conteúdo da nota -->
+  </infNFe>
+  <Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+    <!-- inserido aqui -->
+  </Signature>
+</NFe>
+```
+
+## Estrutura do bloco `<Signature>`
+
+O bloco XML-DSig segue uma estrutura hierárquica precisa exigida pela especificação:
+
+```mermaid
+flowchart TB
+    Sig["&lt;Signature&gt;<br/>xmlns=&quot;...xmldsig#&quot;"]
+
+    SI["&lt;SignedInfo&gt;"]
+    SV["&lt;SignatureValue&gt;<br/>RSA-SHA1 em Base64"]
+    KI["&lt;KeyInfo&gt;"]
+
+    CM["&lt;CanonicalizationMethod&gt;<br/>C14N 1.0"]
+    SM["&lt;SignatureMethod&gt;<br/>RSA-SHA1"]
+    Ref["&lt;Reference URI=&quot;#NFe35...&quot;&gt;"]
+
+    Tr["&lt;Transforms&gt;"]
+    DM["&lt;DigestMethod&gt;<br/>SHA-1"]
+    DV["&lt;DigestValue&gt;<br/>SHA-1 em Base64"]
+
+    T1["&lt;Transform&gt;<br/>enveloped-signature"]
+    T2["&lt;Transform&gt;<br/>C14N 1.0"]
+
+    X509["&lt;X509Data&gt;"]
+    Cert["&lt;X509Certificate&gt;<br/>Certificado Base64"]
+
+    Sig --> SI
+    Sig --> SV
+    Sig --> KI
+
+    SI --> CM
+    SI --> SM
+    SI --> Ref
+
+    Ref --> Tr
+    Ref --> DM
+    Ref --> DV
+
+    Tr --> T1
+    Tr --> T2
+
+    KI --> X509
+    X509 --> Cert
+
+    style Sig fill:#1e293b,stroke:#f59e0b,color:#fbbf24
+    style SI fill:#1e293b,stroke:#3b82f6,color:#93c5fd
+    style SV fill:#1e293b,stroke:#10b981,color:#6ee7b7
+    style KI fill:#1e293b,stroke:#8b5cf6,color:#c4b5fd
+    style Ref fill:#1e293b,stroke:#3b82f6,color:#93c5fd
+    style Tr fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style T1 fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style T2 fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style DM fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style DV fill:#1e293b,stroke:#ef4444,color:#fca5a5
+    style CM fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style SM fill:#1e293b,stroke:#64748b,color:#cbd5e1
+    style X509 fill:#1e293b,stroke:#8b5cf6,color:#c4b5fd
+    style Cert fill:#1e293b,stroke:#8b5cf6,color:#c4b5fd
+```
+
+### Algoritmos utilizados
+
+| Componente | Algoritmo | URI |
+|------------|-----------|-----|
+| Canonicalização | C14N 1.0 (sem comentários) | `http://www.w3.org/TR/2001/REC-xml-c14n-20010315` |
+| Método de assinatura | RSA-SHA1 | `http://www.w3.org/2000/09/xmldsig#rsa-sha1` |
+| Transform 1 | Enveloped signature | `http://www.w3.org/2000/09/xmldsig#enveloped-signature` |
+| Transform 2 | C14N 1.0 | `http://www.w3.org/TR/2001/REC-xml-c14n-20010315` |
+| Digest | SHA-1 | `http://www.w3.org/2000/09/xmldsig#sha1` |
+
+## Assinatura de NF-e vs. Eventos
+
+O `fiscal-crypto` expõe duas funções públicas que compartilham a mesma lógica interna (`sign_xml_generic`), diferindo apenas nos nomes das tags-alvo:
+
+| Função | Elemento assinado | Elemento pai (recebe `<Signature>`) |
+|--------|-------------------|-------------------------------------|
+| `sign_xml()` | `<infNFe>` | `<NFe>` |
+| `sign_event_xml()` | `<infEvento>` | `<evento>` |
+
+```rust
+use fiscal::certificate::{sign_xml, sign_event_xml};
+
+// Assinando uma NF-e
+let nfe_assinada = sign_xml(
+    &xml_nfe,
+    &cert_data.private_key,
+    &cert_data.certificate,
+)?;
+
+// Assinando um evento (cancelamento, CCe, etc.)
+let evento_assinado = sign_event_xml(
+    &xml_evento,
+    &cert_data.private_key,
+    &cert_data.certificate,
+)?;
+```
+
+## Integração com `InvoiceBuilder`
+
+A forma mais prática de assinar é usar o método `sign_with()` do builder, que aceita um closure de assinatura:
+
+```rust
+use fiscal::certificate::{load_certificate, sign_xml};
+use fiscal::xml_builder::InvoiceBuilder;
+
+let cert = load_certificate(&pfx_bytes, "senha")?;
+
+let signed_invoice = InvoiceBuilder::new(issuer, env, model)
+    .series(1)
+    .invoice_number(42)
+    .add_item(item)
+    .payments(pagamentos)
+    .build()?
+    .sign_with(|xml| {
+        sign_xml(xml, &cert.private_key, &cert.certificate)
+    })?;
+
+// O XML final assinado
+let xml_pronto = signed_invoice.signed_xml();
+```
+
+O typestate do builder garante em tempo de compilação que `signed_xml()` só pode ser chamado após a assinatura (`InvoiceBuilder<Signed>`).
+
+## Canonicalização C14N
+
+A canonicalização (C14N) transforma um documento XML em uma forma canônica determinística. Isso é necessário porque dois documentos XML semanticamente idênticos podem ter representações textuais diferentes:
+
+```xml
+<!-- Estas duas representações são equivalentes, mas produziriam hashes diferentes -->
+<?xml version="1.0" encoding="UTF-8"?>
+<tag   atributo = "valor" />
+
+<tag atributo="valor"></tag>
+```
+
+O C14N 1.0 (sem comentários) define regras como:
+- Remover a declaração XML (`<?xml ... ?>`)
+- Normalizar whitespace em atributos
+- Expandir tags auto-fechantes (`<tag/>` vira `<tag></tag>`)
+- Ordenar atributos em ordem lexicográfica
+- Normalizar quebras de linha para `\n`
+
+<Callout type="info">
+Na prática, o XML gerado pelo `fiscal-rs` já está em forma quase-canônica (sem declaração XML, sem espaços extras, atributos em ordem). A canonicalização se reduz basicamente a remover a declaração `&lt;?xml ... ?&gt;` se presente.
+</Callout>
+
+## Tratamento de erros na assinatura
+
+Todas as funções de assinatura retornam `Result<String, FiscalError>` com a variante `Certificate`. Os cenários de erro incluem:
+
+| Cenário | Mensagem de erro |
+|---------|-----------------|
+| PFX não é um arquivo PKCS#12 válido | `"Invalid PFX data: ..."` |
+| Senha incorreta | `"Failed to parse PFX (wrong password?): ..."` |
+| PFX sem chave privada | `"PFX does not contain a private key"` |
+| PFX sem certificado | `"PFX does not contain a certificate"` |
+| Elemento `<infNFe>` ausente | `"<infNFe> element not found in XML"` |
+| Atributo `Id` ausente | `"Could not find <infNFe> element with Id attribute in XML"` |
+| Chave privada PEM inválida | `"Failed to parse private key: ..."` |
+| Falha na operação RSA | `"RSA-SHA1 signing failed: ..."` |
+| Tag de fechamento ausente | `"<NFe> closing tag not found in XML"` |
+
+```rust
+match sign_xml(&xml, &key, &cert) {
+    Ok(signed) => println!("XML assinado com sucesso"),
+    Err(FiscalError::Certificate(msg)) => {
+        eprintln!("Erro de assinatura: {msg}");
+        // Verificar certificado, senha, e formato do XML
+    }
+    Err(other) => eprintln!("Erro inesperado: {other}"),
+}
+```
+
+## Notas de segurança
+
+- **Chaves privadas em memória** -- as strings PEM ficam apenas em memória (heap). O `fiscal-rs` não persiste chaves privadas em disco.
+- **Senhas** -- o `CertificateData` armazena a senha para permitir reutilização (ex: mTLS com SEFAZ). Proteja esse struct adequadamente na sua aplicação.
+- **Certificados A3 (hardware)** -- **não suportados**. O `fiscal-rs` trabalha apenas com certificados A1 em arquivo PFX.
+- **Validade** -- verifique `CertificateInfo.valid_until` para alertar sobre certificados próximos do vencimento. Um certificado expirado será rejeitado pela SEFAZ.

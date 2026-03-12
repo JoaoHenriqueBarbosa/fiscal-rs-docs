@@ -1,0 +1,221 @@
+---
+title: Estrutura do Projeto
+description: Mapa completo de diretórios e arquivos do repositório fiscal-rs
+---
+
+## Visão Geral
+
+O repositório `fiscal-rs` é um workspace Cargo com três crates de biblioteca, um crate fachada, suítes de teste, benchmarks, fuzz targets e infraestrutura de CI/CD.
+
+```
+fiscal-rs/
+├── Cargo.toml              # Workspace root + crate fachada
+├── Cargo.lock              # Lockfile de dependências
+├── src/
+│   └── lib.rs              # Fachada: re-exporta fiscal-core, fiscal-crypto, fiscal-sefaz
+├── crates/
+│   ├── fiscal-core/        # Lógica pura: tipos, impostos, XML builder
+│   ├── fiscal-crypto/      # Certificado digital e assinatura XML
+│   └── fiscal-sefaz/       # Comunicação com webservices SEFAZ
+├── tests/                  # Testes de integração do workspace
+│   ├── fixtures/           # Arquivos de teste (XML, TXT, certificados, XSD)
+│   └── snapshots/          # Snapshots insta
+├── benches/                # Benchmarks com divan
+├── fuzz/                   # Fuzz targets com cargo-fuzz / libfuzzer
+├── docs/                   # Site de documentação (Fumadocs/Next.js)
+├── scripts/                # Git hooks e utilitários
+├── .github/                # Workflows CI e Dependabot
+├── clippy.toml             # Configuração do Clippy
+├── rustfmt.toml            # Configuração do rustfmt
+├── deny.toml               # Configuração do cargo-deny (licenças, advisories)
+└── release-plz.toml        # Configuração do release-plz (publicação automática)
+```
+
+## Crate Raiz — Fachada
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `Cargo.toml` | Define o workspace (`members`) e o crate fachada `fiscal` com dependências nos três sub-crates |
+| `src/lib.rs` | Re-exporta `fiscal_core::*`, `fiscal_crypto::certificate` e `fiscal_sefaz` |
+
+O crate fachada não contém lógica própria — existe apenas para oferecer um ponto de entrada unificado (`use fiscal::...`).
+
+## Crates Internos
+
+### `crates/fiscal-core/`
+
+Núcleo funcional puro — sem I/O, sem `unsafe`, sem dependência de OpenSSL ou rede.
+
+| Arquivo | Módulo | Descrição |
+|---------|--------|-----------|
+| `lib.rs` | — | Declaração de todos os módulos públicos |
+| `types.rs` | `types` | Structs principais: `IssuerData`, `RecipientData`, `InvoiceItemData`, `PaymentData`, enums `InvoiceModel`, `SefazEnvironment`, `TaxRegime` |
+| `newtypes.rs` | `newtypes` | Newtypes validados: `TaxId`, `Gtin`, `Ncm`, `Cfop`, `Cents`, `Rate`, `Rate4` |
+| `error.rs` | `error` | `FiscalError` — tipo de erro unificado com `thiserror` |
+| `xml_builder/` | `xml_builder` | `InvoiceBuilder` typestate (`Draft` → `Built` → `Signed`) |
+| `xml_utils.rs` | `xml_utils` | Primitivas XML: `tag()`, `escape_xml()`, `extract_xml_tag_value()` |
+| `tax_element.rs` | `tax_element` | `TaxElement` e `TaxField` — estrutura genérica de imposto |
+| `tax_icms.rs` | `tax_icms` | ICMS: 15+ variantes CST/CSOSN, acumulador `IcmsTotals` |
+| `tax_pis_cofins_ipi.rs` | `tax_pis_cofins_ipi` | PIS, COFINS, IPI e II (Imposto de Importação) |
+| `tax_issqn.rs` | `tax_issqn` | ISSQN — imposto sobre serviços municipais |
+| `tax_is.rs` | `tax_is` | IS — imposto IBS/CBS da reforma tributária |
+| `complement.rs` | `complement` | Anexação de protocolo SEFAZ ao XML assinado |
+| `contingency.rs` | `contingency` | Gerenciamento de contingência (SVC-AN, SVC-RS, offline) |
+| `qrcode.rs` | `qrcode` | Geração de URL de QR Code para NFC-e |
+| `convert.rs` | `convert` | Conversão de arquivo TXT (SPED) para XML |
+| `standardize.rs` | `standardize` | Identificação de tipo de documento XML e conversão para JSON |
+| `gtin.rs` | `gtin` | Validação de código de barras GTIN/EAN |
+| `format_utils.rs` | `format_utils` | Formatação de centavos, alíquotas e quantidades para XML |
+| `state_codes.rs` | `state_codes` | Tabela de códigos IBGE dos estados brasileiros |
+| `status_codes.rs` | `status_codes` | Códigos de status (`cStat`) das respostas SEFAZ |
+| `constants.rs` | `constants` | Namespaces XML, URIs de algoritmos, códigos de pagamento |
+| `traits.rs` | `traits` | Traits selados: `TaxCalculation`, `XmlSerializable` |
+| `sealed.rs` | `sealed` | Infraestrutura do sealed trait pattern |
+
+### `crates/fiscal-crypto/`
+
+Casca imperativa para criptografia — depende de OpenSSL.
+
+| Arquivo | Módulo | Descrição |
+|---------|--------|-----------|
+| `lib.rs` | — | Declaração do módulo `certificate` |
+| `certificate.rs` | `certificate` | `load_certificate()` (PFX → chave + cert), `sign_xml()` (XML-DSig) |
+
+### `crates/fiscal-sefaz/`
+
+Casca imperativa para comunicação SEFAZ — depende de `reqwest` (feature-gated).
+
+| Arquivo | Módulo | Descrição |
+|---------|--------|-----------|
+| `lib.rs` | — | Declaração dos módulos e re-exportação de `status_codes` |
+| `urls.rs` | `urls` | Resolução de URLs por UF e ambiente (produção/homologação) |
+| `services.rs` | `services` | Metadados SOAP: método, operação, versão por serviço |
+| `request_builders.rs` | `request_builders` | Builders de envelope SOAP para cada operação |
+| `response_parsers.rs` | `response_parsers` | Parsing de resposta XML e structs tipadas de resultado |
+| `client.rs` | `client` | Client HTTP async com mTLS via `reqwest` + `native-tls` |
+| `soap.rs` | (privado) | Utilitários internos de envelope SOAP |
+
+## Testes
+
+O diretório `tests/` contém testes de integração que exercitam o workspace inteiro.
+
+### Arquivos de Teste
+
+| Arquivo | Tipo | Descrição |
+|---------|------|-----------|
+| `certificate_test.rs` | Integração | Carregamento de PFX, extração de dados, assinatura XML |
+| `complement_test.rs` | Integração | Anexação de protocolo de autorização |
+| `complement_ported_test.rs` | Portado | Testes portados do PHP sped-nfe (complement) |
+| `make_ported_test.rs` | Portado | Testes portados de construção de NF-e |
+| `deep_comm_coverage_ported_test.rs` | Portado | Cobertura profunda de campos de comunicação |
+| `render_coverage_ported_test.rs` | Portado | Cobertura de renderização XML |
+| `tax_coverage_ported_test.rs` | Portado | Cobertura de cálculos de impostos (parte 1) |
+| `tax_coverage_ported_part2_test.rs` | Portado | Cobertura de cálculos de impostos (parte 2) |
+| `tools_ported_test.rs` | Portado | Utilitários portados do PHP |
+| `misc_ported_test.rs` | Portado | Testes diversos portados do PHP |
+| `tax_icms_test.rs` | Unitário | Testes específicos de ICMS |
+| `tax_pis_cofins_ipi_test.rs` | Unitário | Testes específicos de PIS, COFINS e IPI |
+| `xml_builder_test.rs` | Integração | InvoiceBuilder typestate end-to-end |
+| `qrcode_test.rs` | Unitário | Geração de QR Code NFC-e |
+| `property_tests.rs` | Property | Testes baseados em propriedades com `proptest` |
+| `snapshot_tests.rs` | Snapshot | Testes de snapshot com `insta` |
+| `common/mod.rs` | Helper | Módulo compartilhado de utilidades para testes |
+
+### Fixtures (`tests/fixtures/`)
+
+| Diretório | Conteúdo |
+|-----------|----------|
+| `certs/` | Certificados PFX de teste (CNPJ e CPF com senha `minhasenha`) |
+| `xml/` | XMLs de referência: NF-e layout 4, NFC-e, CT-e, NF-e antiga v3.10, contingência |
+| `txt/` | Arquivos TXT no formato SPED para conversão TXT→XML |
+| `schemes/` | Schemas XSD oficiais (`tiposBasico_v4.00.xsd`) |
+
+### Snapshots (`tests/snapshots/`)
+
+Arquivos `.snap` gerados pelo [insta](https://insta.rs) para testes de snapshot. Capturam a saída exata de funções de serialização XML, formatação de tags e cálculos de impostos, protegendo contra regressões.
+
+## Benchmarks
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `benches/fiscal_bench.rs` | Benchmarks com [divan](https://github.com/nvzqz/divan) para operações críticas de performance |
+| `benches/baseline_*.txt` | Resultados de baselines históricas para comparação de performance |
+
+O `Cargo.toml` raiz configura o benchmark com `harness = false` (necessário para o divan):
+
+```toml
+[[bench]]
+name = "fiscal_bench"
+harness = false
+```
+
+Para executar:
+
+```bash
+cargo bench
+```
+
+## Fuzz Targets
+
+O diretório `fuzz/` contém targets para [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) (baseado em libfuzzer), focados em entradas não confiáveis.
+
+| Target | Descrição |
+|--------|-----------|
+| `fuzz_response_parsers` | Fuzzing dos parsers de resposta SEFAZ |
+| `fuzz_txt_to_xml` | Fuzzing da conversão TXT→XML |
+| `fuzz_xml_standardize` | Fuzzing da identificação de tipo XML |
+| `fuzz_gtin_validation` | Fuzzing da validação de código de barras |
+| `fuzz_xml_tag_extraction` | Fuzzing da extração de valores de tags XML |
+
+O diretório `fuzz/corpus/` contém seeds iniciais (XMLs válidos) para alimentar o fuzzer.
+
+Para executar um target:
+
+```bash
+cargo +nightly fuzz run fuzz_response_parsers
+```
+
+## CI/CD (`.github/`)
+
+### Workflows
+
+| Workflow | Trigger | Jobs |
+|----------|---------|------|
+| `ci.yml` | Push/PR para `master` | **Rustfmt** (formatação), **Clippy** (lints), **Tests** (nextest), **Doc tests**, **Documentation** (cargo doc) |
+| `audit.yml` | Push para `master`, diário (06:00 UTC), manual | **cargo-deny** (licenças, bans, advisories), **cargo-audit** (RustSec) |
+| `release-plz.yml` | Push para `master` | **Release** (publica no crates.io), **Release PR** (abre PR de release com changelog) |
+
+### Dependabot
+
+O arquivo `dependabot.yml` configura atualizações automáticas de dependências Cargo e GitHub Actions.
+
+## Configuração de Qualidade
+
+| Arquivo | Ferramenta | Destaques |
+|---------|------------|-----------|
+| `clippy.toml` | Clippy | MSRV 1.85, threshold de complexidade cognitiva = 30 |
+| `rustfmt.toml` | rustfmt | Edition 2024, largura máxima 100, field init shorthand |
+| `deny.toml` | cargo-deny | Licenças permitidas (MIT, Apache-2.0, BSD, etc.), `wildcards = "deny"`, advisories RustSec |
+| `release-plz.toml` | release-plz | Conventional commits, semver-checks habilitado, timeout de 10 min para publicação |
+
+## Scripts
+
+| Arquivo | Descrição |
+|---------|-----------|
+| `scripts/install-hooks.sh` | Instala git hooks do diretório `scripts/hooks/` no `.git/hooks/` |
+| `scripts/hooks/pre-push` | Hook pre-push que executa fmt, clippy, testes, doc tests, cargo doc e cargo-deny antes de permitir o push |
+
+O hook `pre-push` replica localmente os mesmos checks do CI, bloqueando pushes que quebrariam o pipeline.
+
+## Site de Documentação (`docs/`)
+
+O diretório `docs/` é um site [Fumadocs](https://fumadocs.vercel.app/) (Next.js + MDX):
+
+| Caminho | Descrição |
+|---------|-----------|
+| `content/docs/` | Páginas MDX da documentação |
+| `content/docs/meta.json` | Ordem e agrupamento das páginas na sidebar |
+| `src/components/mermaid.tsx` | Componente de diagramas Mermaid com zoom, pan e exportação JPG |
+| `src/components/mdx.tsx` | Registro de componentes MDX customizados |
+| `source.config.ts` | Configuração do Fumadocs source |
+| `next.config.mjs` | Configuração do Next.js |

@@ -1,0 +1,253 @@
+---
+title: Conversao TXT → XML
+description: Converta arquivos TXT no formato SPED (delimitado por pipes) para XML de NF-e valido. Suporte a multiplos layouts incluindo SEBRAE.
+---
+
+## Visao Geral
+
+O formato TXT do SPED e uma representacao legada dos dados da NF-e, utilizada por sistemas fiscais antigos e pelo layout simplificado do SEBRAE. Cada linha do arquivo representa um grupo de dados, prefixado por um identificador de tag e com campos delimitados por `|` (pipe).
+
+O modulo `convert` do `fiscal-core` converte esse formato em XML de NF-e valido, pronto para assinatura e transmissao a SEFAZ.
+
+**Arquivo fonte**: `fiscal-core/src/convert.rs`
+
+```mermaid
+flowchart TD
+    A["Arquivo TXT\n(SPED pipe-delimited)"] --> B["txt_to_xml()"]
+    B --> C{"Cabecalho\nNOTAFISCAL|n|"}
+    C -->|Invalido| ERR["FiscalError::WrongDocument"]
+    C -->|Valido| D["Separar notas\n(slice_invoices)"]
+    D --> E["Detectar versao\n(extract_layout_version)"]
+    E --> F["Selecionar layout\n(get_structure)"]
+    F --> G{"Validar linhas\n(validate_txt_lines)"}
+    G -->|Erros| ERR2["FiscalError::InvalidTxt"]
+    G -->|OK| H["NFeParser::parse()\nProcessar linha a linha"]
+    H --> I["NFeParser::build_xml()\nMontar documento"]
+    I --> J["XML de NF-e\n(nao assinado)"]
+
+    style A fill:#e8f4f8,stroke:#2980b9
+    style J fill:#e8f5e9,stroke:#27ae60
+    style ERR fill:#fce4ec,stroke:#e53935
+    style ERR2 fill:#fce4ec,stroke:#e53935
+```
+
+## Formato TXT do SPED
+
+O arquivo TXT comeca obrigatoriamente com uma linha de cabecalho `NOTAFISCAL` que declara a quantidade de notas no arquivo. Em seguida, cada nota e composta por linhas que representam grupos XML:
+
+```text
+NOTAFISCAL|1|
+A|4.00|NFe35200209944445000162550010001234561890123450|
+B|35|89012345|VENDA DE MERCADORIA|55|1|123456|2020-02-15T10:00:00-03:00||1|1|3550308||1|1|0|2|1|1|1||0|fiscal-rs||
+C|Empresa Teste Ltda|Teste ME|140950881119|||1|
+C02|09944445000162|
+C05|Rua Principal|100||Centro|3550308|SAO PAULO|SP|01000000|1058|BRASIL||
+E|Consumidor Final|9||||
+E03|12345678901|
+E05|Av Paulista|1000||Bela Vista|3550308|SAO PAULO|SP|01310100|1058|BRASIL||
+H|1||
+I|001|SEM GTIN|Produto Exemplo|61091000||5102|UN|1.0000|10.50|10.50|SEM GTIN|UN|1.0000|10.50|0.00|0.00|0.00|0.00|1||||
+N|
+N06|102|||||||
+Q|
+Q02|01|10.50|1.6500|0.17|
+S|
+S02|01|10.50|7.6000|0.80|
+W|
+W02|0.00|0.00|0.00|0.00|0.00|10.50|0.00|0.00|0.00|10.50|0.97|
+X|9|
+YA|0|01|10.50||
+Z|||
+```
+
+### Significado das tags
+
+| Tag | Grupo XML | Descricao |
+|-----|-----------|-----------|
+| `NOTAFISCAL` | Cabecalho | Quantidade de notas no arquivo |
+| `A` | `<NFe>` / `<infNFe>` | Versao do layout e chave de acesso (Id) |
+| `B` | `<ide>` | Identificacao (UF, modelo, serie, numero, data) |
+| `C` | `<emit>` | Dados do emitente |
+| `C02` / `C02A` | CNPJ/CPF emit | Documento do emitente |
+| `C05` | `<enderEmit>` | Endereco do emitente |
+| `E` | `<dest>` | Dados do destinatario |
+| `E02` / `E03` | CNPJ/CPF dest | Documento do destinatario |
+| `E05` | `<enderDest>` | Endereco do destinatario |
+| `H` | `<det>` (cabecalho) | Numero do item |
+| `I` | `<prod>` | Dados do produto |
+| `N` / `N02`-`N10` | `<ICMS>` | Dados do imposto ICMS |
+| `O` / `O07` / `O08` | `<IPI>` | Dados do imposto IPI |
+| `Q` / `Q02` | `<PIS>` | Dados do imposto PIS |
+| `S` / `S02` | `<COFINS>` | Dados do imposto COFINS |
+| `M` | `<imposto>` | Valor total de tributos |
+| `W` / `W02` | `<total>` | Totais da nota |
+| `X` | `<transp>` | Dados de transporte |
+| `Y02` | `<fat>` | Fatura |
+| `Y07` | `<dup>` | Duplicatas |
+| `YA` | `<detPag>` | Detalhamento do pagamento |
+| `Z` | `<infAdic>` | Informacoes adicionais |
+
+## Layouts Suportados
+
+O conversor suporta diferentes versoes de layout do TXT, selecionadas pelo parametro `layout` e pela versao declarada na tag `A`:
+
+| Layout | Versao | Descricao |
+|--------|--------|-----------|
+| `LOCAL` | 4.00 | Layout local padrao com conjunto completo de campos |
+| `LOCAL_V12` | 4.00 | Layout local v1.2 (padrao quando layout nao reconhecido) |
+| `LOCAL_V13` | 4.00 | Layout local v1.3 com campos atualizados |
+| `SEBRAE` | 4.00 | Layout simplificado para pequenas empresas |
+| *(qualquer)* | 3.10 | Layout legado versao 3.10 |
+
+Cada layout define um mapeamento de tag para nomes de campos. Por exemplo, a tag `B` no layout `LOCAL` (v4.00) define:
+
+```text
+B|cUF|cNF|natOp|mod|serie|nNF|dhEmi|dhSaiEnt|tpNF|idDest|cMunFG|...|
+```
+
+A contagem de campos e usada na validacao: se a quantidade de pipes na linha nao bater com a definicao do layout, o erro e reportado.
+
+## API Publica
+
+### `txt_to_xml`
+
+Converte o conteudo TXT completo em XML de NF-e:
+
+```rust
+use fiscal_core::convert::txt_to_xml;
+
+let txt = std::fs::read_to_string("nota.txt").unwrap();
+let xml = txt_to_xml(&txt, "local_v12")?;
+
+// O resultado e um XML <NFe> valido, nao assinado
+assert!(xml.starts_with("<NFe xmlns="));
+```
+
+**Parametros:**
+
+| Parametro | Tipo | Descricao |
+|-----------|------|-----------|
+| `txt` | `&str` | Conteudo do arquivo TXT |
+| `layout` | `&str` | Nome do layout: `"local"`, `"local_v12"`, `"local_v13"`, `"sebrae"` |
+
+**Retorno:** `Result<String, FiscalError>` -- o XML da primeira nota encontrada no arquivo.
+
+**Erros possiveis:**
+
+| Erro | Causa |
+|------|-------|
+| `FiscalError::WrongDocument` | Arquivo vazio ou primeira linha nao comeca com `NOTAFISCAL` |
+| `FiscalError::InvalidTxt` | Erros de validacao estrutural (campos faltando, caracteres proibidos, chave invalida) |
+
+### `validate_txt`
+
+Valida a estrutura do TXT sem gerar XML:
+
+```rust
+use fiscal_core::convert::validate_txt;
+
+let txt = std::fs::read_to_string("nota.txt").unwrap();
+match validate_txt(&txt, "local_v12") {
+    Ok(true) => println!("TXT valido"),
+    Ok(false) => println!("TXT com erros de estrutura"),
+    Err(e) => println!("Documento invalido: {e}"),
+}
+```
+
+## Pipeline Interna
+
+```mermaid
+flowchart LR
+    subgraph "NFeParser"
+        direction TB
+        P1["parse()"] --> P2["Itera linhas"]
+        P2 --> P3["handle(ref, fields)"]
+        P3 --> P4{"Tag?"}
+        P4 -->|A| PA["Versao + Id"]
+        P4 -->|B| PB["ide_data"]
+        P4 -->|C/C02/C05| PC["emit + enderEmit"]
+        P4 -->|E/E02-E05| PE["dest + enderDest"]
+        P4 -->|H| PH["Novo item\n(finalize anterior)"]
+        P4 -->|I| PI["Produto atual"]
+        P4 -->|N02-N10| PN["ICMS atual"]
+        P4 -->|Q02/S02| PQ["PIS/COFINS"]
+        P4 -->|W/W02| PW["Totais"]
+        P4 -->|X/YA/Z| PX["Transp/Pag/InfAdic"]
+    end
+
+    subgraph "build_xml()"
+        direction TB
+        B1["build_ide()"] --> B2["build_emit()"]
+        B2 --> B3["build_dest()"]
+        B3 --> B4["build_det() x N"]
+        B4 --> B5["build_total()"]
+        B5 --> B6["build_transp()"]
+        B6 --> B7["build_pag()"]
+        B7 --> B8["build_inf_adic()"]
+    end
+
+    P1 ==> B1
+```
+
+O `NFeParser` e uma maquina de estados que acumula dados conforme processa cada linha. Quando encontra a tag `H` (cabecalho de item), finaliza o item anterior e inicia um novo. Ao encontrar `W` (totais), finaliza o ultimo item. No final, `build_xml()` monta o documento XML completo percorrendo cada grupo na ordem exigida pelo schema da NF-e.
+
+### Validacoes realizadas
+
+1. **Cabecalho** -- a primeira linha deve ser `NOTAFISCAL|n|` com a quantidade de notas
+2. **Quantidade de notas** -- a quantidade declarada deve bater com o numero de blocos `A|` encontrados
+3. **Pipe final** -- toda linha deve terminar com `|`
+4. **Contagem de campos** -- cada tag deve ter exatamente o numero de campos definido no layout
+5. **Caracteres proibidos** -- campos nao podem conter `<`, `>`, `"`, `'`, tabs ou carriage returns
+6. **Chave de acesso** -- se informada, deve ter exatamente 44 digitos (excluindo o prefixo `NFe`)
+
+## Exemplo: Entrada e Saida
+
+**Entrada (TXT):**
+
+```text
+NOTAFISCAL|1|
+A|4.00|NFe35200209944445000162550010001234561890123450|
+B|35|89012345|VENDA|55|1|123456|2020-02-15T10:00:00-03:00||1|1|3550308||1|1|0|2|1|1|1||0|fiscal-rs||
+C|Empresa Ltda||140950881119|||1|
+C02|09944445000162|
+C05|Rua A|100||Centro|3550308|SAO PAULO|SP|01000000|||
+...
+```
+
+**Saida (XML):**
+
+```xml
+<NFe xmlns="http://www.portalfiscal.inf.br/nfe">
+  <infNFe Id="NFe35200209944445000162550010001234561890123450" versao="4.00">
+    <ide>
+      <cUF>35</cUF>
+      <cNF>89012345</cNF>
+      <natOp>VENDA</natOp>
+      <mod>55</mod>
+      <serie>1</serie>
+      <nNF>123456</nNF>
+      <dhEmi>2020-02-15T10:00:00-03:00</dhEmi>
+      <!-- ... demais campos ... -->
+    </ide>
+    <emit>
+      <CNPJ>09944445000162</CNPJ>
+      <xNome>Empresa Ltda</xNome>
+      <enderEmit>
+        <xLgr>Rua A</xLgr>
+        <nro>100</nro>
+        <!-- ... -->
+      </enderEmit>
+      <IE>140950881119</IE>
+      <CRT>1</CRT>
+    </emit>
+    <!-- dest, det[], total, transp, pag, infAdic -->
+  </infNFe>
+</NFe>
+```
+
+## Casos de Uso
+
+1. **Migracao de sistemas legados** -- importar notas fiscais de sistemas antigos compativeis com SPED
+2. **Processamento em lote** -- converter multiplos arquivos TXT para XML para autorizacao em massa
+3. **Integracao com SEBRAE** -- suportar o layout simplificado usado por pequenas empresas
+4. **Testes e fixtures** -- a suite de testes original do sped-nfe utiliza fixtures em TXT; o conversor possibilita a portabilidade

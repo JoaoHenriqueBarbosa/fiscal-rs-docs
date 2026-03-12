@@ -1,0 +1,332 @@
+---
+title: "Bindings FFI: Uma Lib, Qualquer Linguagem"
+description: Estratégia de bindings FFI do fiscal-rs para Python, Node.js, WebAssembly e plataformas móveis
+---
+
+O **fiscal-rs** é escrito em Rust, mas foi projetado desde o início para ser consumido por qualquer linguagem. A estratégia de FFI (_Foreign Function Interface_) permite que um único núcleo de alta performance sirva aplicações em Python, Node.js, navegadores web e aplicações móveis nativas.
+
+## Por que Rust é ideal para FFI?
+
+Rust possui características únicas que o tornam a melhor escolha para bibliotecas multi-linguagem:
+
+| Característica | Benefício para FFI |
+|---|---|
+| Sem Garbage Collector | Não interfere com o GC da linguagem hospedeira (Python, JS, etc.) |
+| Compatibilidade C ABI | Exporta funções `extern "C"` que qualquer linguagem pode chamar |
+| Segurança de memória | Sem use-after-free, double-free ou data races — mesmo cruzando fronteiras FFI |
+| Compilação para múltiplos alvos | Um único codebase gera `.so`, `.dylib`, `.dll`, `.wasm` |
+| Zero-cost abstractions | Performance nativa sem overhead de runtime |
+
+## Arquitetura: núcleo compartilhado
+
+Todas as bindings compartilham o mesmo núcleo Rust. A lógica fiscal, cálculos de impostos e geração de XML existem em um único lugar — as bindings são camadas finas de tradução.
+
+```mermaid
+graph TB
+    subgraph core["fiscal-core (Rust puro)"]
+        types["Tipos & Newtypes"]
+        tax["Cálculos fiscais"]
+        xml["Geração XML"]
+        qr["QR Code NFC-e"]
+    end
+
+    subgraph crypto["fiscal-crypto"]
+        cert["Certificado A1"]
+        sign["Assinatura XML-DSig"]
+    end
+
+    subgraph sefaz["fiscal-sefaz"]
+        client["Client mTLS"]
+        urls["URLs SEFAZ"]
+    end
+
+    core --> crypto
+    core --> sefaz
+
+    subgraph bindings["Bindings FFI"]
+        py["fiscal-py\n(PyO3 + maturin)"]
+        node["fiscal-node\n(napi-rs)"]
+        wasm["fiscal-wasm\n(wasm-bindgen)"]
+        uniffi["fiscal-mobile\n(UniFFI)"]
+    end
+
+    core --> py
+    core --> node
+    core --> wasm
+    core --> uniffi
+    crypto --> py
+    crypto --> node
+    crypto --> uniffi
+
+    subgraph targets["Linguagens alvo"]
+        python["Python 3.9+"]
+        nodejs["Node.js 18+"]
+        browser["Navegadores\n(Chrome, Firefox, Safari)"]
+        kotlin["Kotlin (Android)"]
+        swift["Swift (iOS)"]
+    end
+
+    py --> python
+    node --> nodejs
+    wasm --> browser
+    uniffi --> kotlin
+    uniffi --> swift
+```
+
+## Bindings planejadas
+
+### Python via PyO3
+
+[PyO3](https://pyo3.rs) é o framework padrão para criar extensões nativas de Python em Rust. Combinado com [maturin](https://www.maturin.rs/), permite publicar no PyPI com `pip install`.
+
+```rust
+use pyo3::prelude::*;
+use fiscal_core::types::*;
+use fiscal_core::xml_builder::InvoiceBuilder;
+
+/// Gera o XML de uma NF-e a partir dos dados fornecidos.
+#[pyfunction]
+fn build_invoice_xml(
+    cnpj: &str,
+    ie: &str,
+    razao_social: &str,
+    items: Vec<PyInvoiceItem>,
+) -> PyResult<PyInvoiceResult> {
+    let issuer = IssuerData::new(cnpj, ie, razao_social, /* ... */);
+    let mut builder = InvoiceBuilder::new(
+        issuer,
+        SefazEnvironment::Homologation,
+        InvoiceModel::NFe,
+    );
+
+    for item in items {
+        builder = builder.add_item(item.into());
+    }
+
+    let invoice = builder.build()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            e.to_string()
+        ))?;
+
+    Ok(PyInvoiceResult {
+        access_key: invoice.access_key().to_string(),
+        xml: invoice.xml().to_string(),
+    })
+}
+
+/// Modulo Python publicado como `fiscal_rs`.
+#[pymodule]
+fn fiscal_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(build_invoice_xml, m)?)?;
+    Ok(())
+}
+```
+
+**Uso em Python:**
+
+```python
+from fiscal_rs import build_invoice_xml
+
+resultado = build_invoice_xml(
+    cnpj="25028332000105",
+    ie="140950881119",
+    razao_social="Minha Empresa",
+    items=[{
+        "codigo": "001",
+        "descricao": "Produto Teste",
+        "ncm": "18069000",
+        "cfop": "5102",
+        "valor_total": 10000,  # R$ 100,00
+    }],
+)
+
+print(f"Chave: {resultado.access_key}")
+print(f"XML: {resultado.xml}")
+```
+
+### Node.js via napi-rs
+
+[napi-rs](https://napi.rs) gera addons nativos para Node.js com definições TypeScript automáticas. A performance é 10-100x superior ao JavaScript puro para operações como geração de XML e cálculos fiscais.
+
+```rust
+use napi_derive::napi;
+use fiscal_core::types::*;
+use fiscal_core::xml_builder::InvoiceBuilder;
+
+#[napi(object)]
+pub struct InvoiceResult {
+    pub access_key: String,
+    pub xml: String,
+}
+
+#[napi]
+pub fn build_invoice_xml(
+    cnpj: String,
+    ie: String,
+    razao_social: String,
+    items: Vec<JsInvoiceItem>,
+) -> napi::Result<InvoiceResult> {
+    let issuer = IssuerData::new(&cnpj, &ie, &razao_social, /* ... */);
+    let mut builder = InvoiceBuilder::new(
+        issuer,
+        SefazEnvironment::Homologation,
+        InvoiceModel::NFe,
+    );
+
+    for item in items {
+        builder = builder.add_item(item.into());
+    }
+
+    let invoice = builder.build()
+        .map_err(|e| napi::Error::from_reason(e.to_string()))?;
+
+    Ok(InvoiceResult {
+        access_key: invoice.access_key().to_string(),
+        xml: invoice.xml().to_string(),
+    })
+}
+```
+
+**Uso em TypeScript:**
+
+```typescript
+import { buildInvoiceXml } from '@fiscal-rs/core';
+
+const resultado = buildInvoiceXml(
+  '25028332000105',
+  '140950881119',
+  'Minha Empresa',
+  [{
+    codigo: '001',
+    descricao: 'Produto Teste',
+    ncm: '18069000',
+    cfop: '5102',
+    valorTotal: 10000,
+  }],
+);
+
+console.log(`Chave: ${resultado.accessKey}`);
+console.log(`XML: ${resultado.xml}`);
+```
+
+### WebAssembly via wasm-bindgen
+
+[wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) compila o código Rust para WebAssembly, executável em qualquer navegador moderno. Ideal para aplicações web que precisam gerar XML ou calcular impostos no cliente.
+
+<Callout type="info">
+A binding WASM expõe apenas os módulos que não dependem de I/O de rede ou sistema de arquivos: tipos, cálculos fiscais, geração de XML e QR Code. Assinatura digital e comunicação com SEFAZ exigem a binding nativa (Python ou Node.js).
+</Callout>
+
+```typescript
+import init, { buildInvoiceXml } from '@fiscal-rs/wasm';
+
+await init(); // carrega o módulo .wasm
+
+const resultado = buildInvoiceXml(/* ... */);
+```
+
+### UniFFI para plataformas móveis (futuro)
+
+[UniFFI](https://mozilla.github.io/uniffi-rs/) (Mozilla) gera bindings Kotlin e Swift a partir de uma definição de interface (UDL ou proc-macros). Permite usar o fiscal-rs em aplicações Android e iOS para PDV móvel.
+
+```kotlin
+// Kotlin (Android) — gerado automaticamente pelo UniFFI
+val resultado = FiscalRs.buildInvoiceXml(
+    cnpj = "25028332000105",
+    ie = "140950881119",
+    razaoSocial = "Minha Empresa",
+    items = listOf(invoiceItem),
+)
+
+println("Chave: ${resultado.accessKey}")
+```
+
+## Pipeline de build por alvo
+
+Cada binding possui seu próprio pipeline de build e publicação:
+
+```mermaid
+flowchart LR
+    subgraph src["Código-fonte Rust"]
+        core["fiscal-core"]
+        crypto["fiscal-crypto"]
+    end
+
+    subgraph build_py["Build Python"]
+        maturin["maturin build\n--release"]
+        wheel["wheel\n(.whl)"]
+        pypi["PyPI\npip install fiscal-rs"]
+    end
+
+    subgraph build_node["Build Node.js"]
+        napirs["napi build\n--release"]
+        addon["addon nativo\n(.node)"]
+        npm["npm\nnpm i @fiscal-rs/core"]
+    end
+
+    subgraph build_wasm["Build WASM"]
+        wasmpack["wasm-pack build\n--target web"]
+        pkg["pkg/\n(.wasm + .js)"]
+        npmwasm["npm\nnpm i @fiscal-rs/wasm"]
+    end
+
+    subgraph build_mobile["Build Mobile"]
+        uniffi_bind["uniffi-bindgen"]
+        kt["Kotlin\n(.kt + .so)"]
+        sw["Swift\n(.swift + .xcframework)"]
+        maven["Maven Central\n/ CocoaPods"]
+    end
+
+    core --> maturin --> wheel --> pypi
+    core --> napirs --> addon --> npm
+    core --> wasmpack --> pkg --> npmwasm
+    core --> uniffi_bind --> kt --> maven
+    uniffi_bind --> sw --> maven
+    crypto --> maturin
+    crypto --> napirs
+    crypto --> uniffi_bind
+```
+
+## Estrutura do workspace
+
+As bindings ficam no diretório `bindings/` do workspace:
+
+```
+fiscal-rs/
+  crates/
+    fiscal-core/        # lógica fiscal (zero I/O)
+    fiscal-crypto/      # certificados e assinatura
+    fiscal-sefaz/       # comunicação SEFAZ
+  bindings/
+    fiscal-py/          # PyO3 + maturin
+      Cargo.toml
+      pyproject.toml
+    fiscal-node/        # napi-rs
+      Cargo.toml
+      package.json
+    fiscal-wasm/        # wasm-bindgen + wasm-pack
+      Cargo.toml
+```
+
+## Comparação entre bindings
+
+| | Python (PyO3) | Node.js (napi-rs) | WASM | UniFFI |
+|---|---|---|---|---|
+| **Instalação** | `pip install` | `npm install` | `npm install` | Maven / CocoaPods |
+| **Performance** | Nativa | Nativa | ~80% nativa | Nativa |
+| **Assinatura XML** | Sim | Sim | Nao | Sim |
+| **SEFAZ (mTLS)** | Sim | Sim | Nao | Sim |
+| **Cálculos fiscais** | Sim | Sim | Sim | Sim |
+| **Geração XML** | Sim | Sim | Sim | Sim |
+| **QR Code** | Sim | Sim | Sim | Sim |
+| **Caso de uso** | Backend, scripts | Backend, API | Frontend web | Mobile (PDV) |
+
+<Callout type="warn">
+As bindings FFI estão em fase de planejamento. A API Rust nativa (`fiscal-core`, `fiscal-crypto`, `fiscal-sefaz`) é a interface estável atual. Contribuições para as bindings são bem-vindas!
+</Callout>
+
+<Cards>
+  <Card title="Primeiros passos" href="/docs/getting-started" />
+  <Card title="Contribuindo" href="/docs/contributing" />
+  <Card title="Arquitetura (módulos)" href="/docs/modules" />
+</Cards>

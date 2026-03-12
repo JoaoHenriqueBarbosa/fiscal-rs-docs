@@ -1,0 +1,273 @@
+---
+title: QR Code para NFC-e
+description: Geração de QR Code para NFC-e (modelo 65) — formatos v2.00 e v3.00, token CSC, modos online e offline, e integração com o XML assinado.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Visão Geral
+
+Toda NFC-e (Nota Fiscal de Consumidor Eletrônica, modelo 65) deve incluir um QR Code para verificação pelo consumidor. O QR Code codifica uma URL que permite consultar a autenticidade da nota no portal da SEFAZ, bastando escanear com qualquer leitor de QR Code.
+
+O módulo `fiscal_core::qrcode` implementa a geração dessa URL nos dois formatos suportados:
+
+| Versão | Especificação | Hash | Status |
+|--------|---------------|------|--------|
+| **v2.00** | Layout padrão | SHA-1 | Legado (ainda em uso) |
+| **v3.00** | NT 2025.001 | Assinatura RSA (offline) | Novo formato |
+
+## Processo de Geração
+
+O fluxo completo de geração do QR Code e inserção no XML segue o diagrama abaixo:
+
+```mermaid
+flowchart TD
+    A["XML da NFC-e assinado"] --> B["Extrair campos do XML"]
+    B --> C{"Qual versão?"}
+    C -->|"v2.00"| D{"Modo de emissão?"}
+    C -->|"v3.00"| E{"Modo de emissão?"}
+
+    D -->|"Online (tpEmis=1)"| F["Montar URL simplificada"]
+    D -->|"Offline (tpEmis=9)"| G["Montar URL com campos extras"]
+
+    E -->|"Online"| H["Montar URL sem CSC"]
+    E -->|"Offline"| I["Erro: requer assinatura com certificado"]
+
+    F --> J["Calcular SHA-1 da sequência + CSC"]
+    G --> K["Extrair dhEmi, vNF, DigestValue"]
+    K --> L["Converter valores para hex"]
+    L --> M["Calcular SHA-1 da sequência + CSC"]
+
+    H --> N["URL final: chave|3|tpAmb"]
+
+    J --> O["URL final com hash"]
+    M --> O
+
+    O --> P["Inserir <infNFeSupl> no XML"]
+    N --> P
+    P --> Q["XML completo com QR Code"]
+
+    style A fill:#e1f5fe
+    style Q fill:#e8f5e9
+    style I fill:#ffebee
+```
+
+## CSC — Código de Segurança do Contribuinte
+
+O CSC é um par de credenciais cadastrado pela empresa junto à SEFAZ estadual. É composto por dois valores:
+
+| Campo | Descrição | Exemplo |
+|-------|-----------|---------|
+| `csc_id` | Identificador numérico do CSC | `"1"` |
+| `csc_token` | Token secreto (string alfanumérica) | `"A8B1C2D3E4F5A6B7C8D9E0F1A2B3C4D5"` |
+
+<Callout type="warn">
+O token CSC **nunca** é transmitido no QR Code ou no XML da nota. Ele é utilizado apenas localmente para calcular o hash de verificação. O portal da SEFAZ possui sua cópia do CSC e recalcula o hash para validar a autenticidade.
+</Callout>
+
+Na v3.00 (modo online), o CSC não é mais necessário — a URL contém apenas a chave de acesso, a versão e o ambiente.
+
+## Formato da URL
+
+### Versão 2.00 — Modo Online (`tpEmis=1`)
+
+O modo online utiliza um formato simplificado, pois a SEFAZ pode consultar os dados da nota diretamente:
+
+```
+{baseUrl}?p={chNFe}|2|{tpAmb}|{cscId}|{hash}
+```
+
+Onde:
+- `chNFe` — chave de acesso de 44 dígitos
+- `2` — versão do QR Code
+- `tpAmb` — ambiente (`1` = produção, `2` = homologação)
+- `cscId` — identificador numérico do CSC
+- `hash` — SHA-1 hexadecimal (maiúsculo) de `{chNFe}|2|{tpAmb}|{cscId}{cscToken}`
+
+```rust
+// Resultado: {baseUrl}?p=35240100...019|2|2|1|A1B2C3D4...
+```
+
+### Versão 2.00 — Modo Offline (`tpEmis=9`)
+
+No modo offline a SEFAZ não pode consultar a nota em tempo real, então campos adicionais são incluídos na URL para permitir a validação:
+
+```
+{baseUrl}?p={chNFe}|2|{tpAmb}|{dia}|{vNF}|{digVal_hex}|{cscId}|{hash}
+```
+
+Campos adicionais:
+- `dia` — dia da emissão extraído de `dhEmi` (2 dígitos, ex: `"15"`)
+- `vNF` — valor total da nota formatado com 2 casas decimais
+- `digVal_hex` — valor do `DigestValue` da assinatura XML convertido para hexadecimal ASCII
+- `hash` — SHA-1 hexadecimal de toda a sequência concatenada com o `cscToken`
+
+### Versão 3.00 — Modo Online (NT 2025.001)
+
+A versão 3.00 simplifica drasticamente o formato online, eliminando a necessidade do CSC:
+
+```
+{baseUrl}?p={chNFe}|3|{tpAmb}
+```
+
+Apenas três campos: chave de acesso, número da versão e ambiente.
+
+<Callout type="info">
+A versão 3.00 no modo offline requer assinatura com certificado digital, funcionalidade que não é suportada pela API síncrona do `fiscal-core`. Para uso offline com v3.00, será necessário implementar a assinatura externamente.
+</Callout>
+
+## API — `build_nfce_qr_code_url`
+
+A função principal para construir a URL do QR Code:
+
+```rust
+use fiscal_core::qrcode::build_nfce_qr_code_url;
+use fiscal_core::types::{
+    NfceQrCodeParams, QrCodeVersion, SefazEnvironment, EmissionType
+};
+
+let params = NfceQrCodeParams {
+    access_key: "35240100000000000100650010000000011000000019".into(),
+    version: QrCodeVersion::V200,
+    environment: SefazEnvironment::Production,
+    emission_type: EmissionType::Normal,  // online
+    qr_code_base_url: "https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica".into(),
+    csc_token: Some("A8B1C2D3E4F5A6B7C8D9E0F1A2B3C4D5".into()),
+    csc_id: Some("1".into()),
+    // Campos abaixo são opcionais no modo online
+    issued_at: None,
+    total_value: None,
+    total_icms: None,
+    digest_value: None,
+    dest_document: None,
+    dest_id_type: None,
+};
+
+let url = build_nfce_qr_code_url(&params)?;
+```
+
+### Parâmetros
+
+| Campo | Tipo | Obrigatório | Descrição |
+|-------|------|-------------|-----------|
+| `access_key` | `String` | Sempre | Chave de acesso de 44 dígitos |
+| `version` | `QrCodeVersion` | Sempre | `V200` ou `V300` |
+| `environment` | `SefazEnvironment` | Sempre | `Production` ou `Homologation` |
+| `emission_type` | `EmissionType` | Sempre | `Normal`, `Offline`, `SvcAn` ou `SvcRs` |
+| `qr_code_base_url` | `String` | Sempre | URL base do QR Code para o estado |
+| `csc_token` | `Option<String>` | v2.00 | Token secreto do CSC |
+| `csc_id` | `Option<String>` | v2.00 | Identificador numérico do CSC |
+| `issued_at` | `Option<String>` | Offline v2.00 | Data/hora da emissão (ISO 8601) |
+| `total_value` | `Option<String>` | Offline v2.00 | Valor total da nota (`vNF`) |
+| `total_icms` | `Option<String>` | Offline v2.00 | Total de ICMS (`vICMS`) |
+| `digest_value` | `Option<String>` | Offline v2.00 | DigestValue da assinatura XML |
+| `dest_document` | `Option<String>` | Nunca | Documento do destinatário (CNPJ/CPF) |
+
+## API — `put_qr_tag`
+
+A função `put_qr_tag` é a forma mais prática de adicionar o QR Code a uma NFC-e já assinada. Ela extrai automaticamente todos os campos necessários do XML, constrói a URL e insere o elemento `<infNFeSupl>` antes do `<Signature>`.
+
+```rust
+use fiscal_core::qrcode::put_qr_tag;
+use fiscal_core::types::PutQRTagParams;
+
+let params = PutQRTagParams {
+    xml: signed_nfce_xml.clone(),
+    version: "200".into(),
+    csc_token: "A8B1C2D3E4F5A6B7C8D9E0F1A2B3C4D5".into(),
+    csc_id: "1".into(),
+    qr_code_base_url: "https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica".into(),
+    url_chave: "https://www.nfce.fazenda.sp.gov.br/consulta".into(),
+};
+
+let xml_with_qr = put_qr_tag(&params)?;
+```
+
+### O que `put_qr_tag` faz internamente
+
+1. Extrai a chave de acesso do atributo `Id` de `<infNFe>` (remove o prefixo `"NFe"`)
+2. Extrai `tpAmb`, `dhEmi`, `tpEmis`, `vNF`, `vICMS` e `DigestValue` do XML
+3. Identifica o documento do destinatário (`CNPJ`, `CPF` ou `idEstrangeiro`) do bloco `<dest>`
+4. Constrói a URL do QR Code via `build_nfce_qr_code_url`
+5. Constrói a URL de consulta via `build_nfce_consult_url`
+6. Monta o elemento `<infNFeSupl>` com `<qrCode>` e `<urlChave>`
+7. Insere o `<infNFeSupl>` imediatamente antes de `<Signature`
+
+### Resultado no XML
+
+```xml
+<NFe>
+  <infNFe ...>
+    <!-- ... dados da NFC-e ... -->
+  </infNFe>
+  <infNFeSupl>
+    <qrCode>https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica?p=3524...019|2|1|1|A1B2C3...</qrCode>
+    <urlChave>https://www.nfce.fazenda.sp.gov.br/consulta?p=3524...019|1</urlChave>
+  </infNFeSupl>
+  <Signature xmlns="http://www.w3.org/2000/09/xmldsig#">
+    <!-- ... assinatura digital ... -->
+  </Signature>
+</NFe>
+```
+
+<Callout type="warn">
+O `put_qr_tag` exige que o XML já esteja assinado (deve conter `<Signature>`). Caso contrário, retorna `FiscalError::XmlGeneration`.
+</Callout>
+
+## URLs Base por Estado
+
+Cada estado possui uma URL específica para consulta do QR Code. As URLs são resolvidas pelas funções `get_nfce_qr_url` e `get_nfce_consult_url` do módulo `fiscal_sefaz::urls`:
+
+```rust
+use fiscal_sefaz::urls::{get_nfce_qr_url, get_nfce_consult_url};
+use fiscal_core::types::SefazEnvironment;
+
+let qr_url = get_nfce_qr_url("SP", SefazEnvironment::Production)?;
+// → "https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica"
+
+let consult_url = get_nfce_consult_url("MG", SefazEnvironment::Homologation)?;
+// → "https://hportalsped.fazenda.mg.gov.br/portalnfce"
+```
+
+Exemplos de URLs de produção por estado:
+
+| Estado | URL Base |
+|--------|----------|
+| SP | `https://www.nfce.fazenda.sp.gov.br/NFCeConsultaPublica` |
+| MG | `https://portalsped.fazenda.mg.gov.br/portalnfce` |
+| RJ | `www.fazenda.rj.gov.br/nfce/consulta` |
+| RS | `www.sefaz.rs.gov.br/nfce/consulta` |
+| BA | `http://www.sefaz.ba.gov.br/nfce/consulta` |
+| PR | `http://www.fazenda.pr.gov.br/nfce/consulta` |
+| SC | `https://sat.sef.sc.gov.br/nfce/consulta` |
+
+As URLs diferem entre os ambientes de produção e homologação. Todos os 27 estados brasileiros são suportados.
+
+## Funções Utilitárias Internas
+
+O módulo utiliza algumas funções auxiliares para a construção da URL:
+
+| Função | Descrição |
+|--------|-----------|
+| `sha1_hex(input)` | Calcula o hash SHA-1 em hexadecimal maiúsculo (40 caracteres) |
+| `str2hex(s)` | Converte uma string para sua representação hexadecimal ASCII |
+| `extract_day(iso_date)` | Extrai o dia (2 dígitos) de uma data ISO 8601 |
+| `format_value(value)` | Formata um valor numérico com 2 casas decimais |
+| `ensure_query_param(url)` | Garante que a URL contenha `?p=`, adicionando se necessário |
+
+## Impressão no DANFCE
+
+A URL do QR Code gerada é impressa no DANFCE (Documento Auxiliar da NFC-e) — o cupom fiscal do consumidor. O consumidor pode escanear o QR Code com qualquer smartphone para verificar a autenticidade da nota diretamente no portal da SEFAZ do seu estado.
+
+## Tratamento de Erros
+
+| Erro | Quando ocorre |
+|------|---------------|
+| `FiscalError::MissingRequiredField("CSC token")` | v2.00 sem token CSC |
+| `FiscalError::MissingRequiredField("CSC ID")` | v2.00 sem ID do CSC |
+| `FiscalError::MissingRequiredField("qr_code_base_url")` | URL base não informada |
+| `FiscalError::MissingRequiredField("issued_at")` | Offline v2.00 sem data de emissão |
+| `FiscalError::MissingRequiredField("total_value")` | Offline v2.00 sem valor total |
+| `FiscalError::MissingRequiredField("digest_value")` | Offline v2.00 sem DigestValue |
+| `FiscalError::XmlGeneration(...)` | v3.00 offline (não suportado) ou `<Signature>` não encontrado |
+| `FiscalError::InvalidStateCode(...)` | UF inválida ao resolver URL base |

@@ -1,0 +1,360 @@
+---
+title: Estratégia de Testes
+description: Suítes de teste, categorias, padrões utilizados e como executar
+---
+
+## Visão Geral
+
+O fiscal-rs possui **692+ testes de integração** distribuídos em 16 arquivos de teste, além de **5 alvos de fuzzing**. A maioria dos testes foi portada diretamente das suítes PHP ([sped-nfe](https://github.com/nfephp-org/sped-nfe)) e TypeScript do FinOpenPOS, garantindo paridade funcional entre as implementações.
+
+| Métrica | Valor |
+|---------|-------|
+| Testes de integração | 692+ |
+| Arquivos de teste | 16 |
+| Alvos de fuzzing | 5 |
+| Linhas de código de teste | ~13.500 |
+| Fixtures (XML, certificados, schemas, TXT) | 4 diretórios |
+
+---
+
+## Categorias de Teste
+
+```mermaid
+flowchart TB
+  subgraph Suite["Suíte de Testes fiscal-rs"]
+    direction TB
+
+    subgraph Ported["Testes Portados (492 testes)"]
+      make["make_ported (90)"]
+      misc["misc_ported (61)"]
+      comp["complement_ported (4)"]
+      tools["tools_ported (35)"]
+      deep["deep_comm_coverage (163)"]
+      render["render_coverage (28)"]
+      tax_cov["tax_coverage (45)"]
+      tax_cov2["tax_coverage_part2 (91)"]
+    end
+
+    subgraph Domain["Testes de Domínio (84 testes)"]
+      icms["tax_icms (19)"]
+      pci["tax_pis_cofins_ipi (17)"]
+      xml["xml_builder (21)"]
+      cert["certificate (14)"]
+      qr["qrcode (5)"]
+      compl["complement (8)"]
+    end
+
+    subgraph Snapshot["Snapshot Tests (50 testes)"]
+      snap["snapshot_tests (50)"]
+    end
+
+    subgraph Property["Property Tests (41 testes)"]
+      prop["property_tests (41)"]
+    end
+
+    subgraph Fuzz["Fuzz Targets (5 alvos)"]
+      fz1["fuzz_gtin_validation"]
+      fz2["fuzz_response_parsers"]
+      fz3["fuzz_txt_to_xml"]
+      fz4["fuzz_xml_standardize"]
+      fz5["fuzz_xml_tag_extraction"]
+    end
+  end
+
+  style Ported fill:#1e3a5f,color:#bfdbfe
+  style Domain fill:#14532d,color:#bbf7d0
+  style Snapshot fill:#713f12,color:#fef08a
+  style Property fill:#581c87,color:#e9d5ff
+  style Fuzz fill:#7f1d1d,color:#fecaca
+```
+
+### Testes Portados
+
+A maior parte da suíte (492 testes) foi portada linha a linha de implementações existentes em PHP e TypeScript. Cada bloco `describe()`/`it()` do TypeScript se tornou um `mod`/`#[test]` em Rust.
+
+| Arquivo | Testes | Origem |
+|---------|--------|--------|
+| `make_ported_test.rs` | 90 | `make-ported.test.ts` |
+| `deep_comm_coverage_ported_test.rs` | 163 | Suite de cobertura PHP |
+| `tax_coverage_ported_part2_test.rs` | 91 | Suite de cobertura PHP |
+| `misc_ported_test.rs` | 61 | Utilitários PHP |
+| `tax_coverage_ported_test.rs` | 45 | Cálculos tributários PHP |
+| `tools_ported_test.rs` | 35 | Tools PHP |
+| `render_coverage_ported_test.rs` | 28 | Renderização XML PHP |
+| `complement_ported_test.rs` | 4 | Complementos PHP |
+
+<Callout type="info">
+Os testes portados validam que o fiscal-rs produz os mesmos resultados que as bibliotecas PHP e TypeScript originais, incluindo os mesmos XMLs de saída e os mesmos cálculos tributários.
+</Callout>
+
+### Testes de Domínio
+
+Testes escritos nativamente em Rust cobrindo módulos específicos:
+
+- **`tax_icms_test.rs`** (19 testes) -- Todos os CSTs de ICMS (00, 10, 20, 30, 40/41/50, 51, 60, 70, 90), CSOSNs do Simples Nacional (101, 102, 103, 201, 202, 500, 900) e ICMS interestadual (UF destino). Utiliza `rstest` para parametrização.
+- **`tax_pis_cofins_ipi_test.rs`** (17 testes) -- PIS, COFINS, IPI e Imposto de Importação
+- **`xml_builder_test.rs`** (21 testes) -- Construção de XML NF-e/NFC-e com o `InvoiceBuilder`
+- **`certificate_test.rs`** (14 testes) -- Extração de certificados PFX e assinatura digital XML
+- **`complement_test.rs`** (8 testes) -- Anexação de protocolo SEFAZ e inutilização
+- **`qrcode_test.rs`** (5 testes) -- Geração de QR codes v2.00 e v3.00
+
+### Snapshot Tests (insta)
+
+Os 50 testes de snapshot utilizam a crate [insta](https://insta.rs/) para verificar regressão de saída. Cobrem:
+
+- **XML utils** -- `tag()`, `escape_xml()`, `extract_xml_tag_value()`
+- **Serialização de TaxElement** -- ICMS00, PISAliq, COFINSAliq, IPITrib, II, ICMSUFDest
+- **Formatação monetária** -- `format_cents`, `format_rate`, `format_rate4`
+- **Códigos de estado** -- Mapeamento UF/IBGE para todos os 27 estados
+- **Totais de ICMS** -- `create_icms_totals`, `merge_icms_totals`
+
+Os snapshots ficam armazenados em `tests/snapshots/` e são comparados automaticamente. Para atualizar:
+
+```bash
+# Revisar mudanças de snapshot interativamente
+cargo insta review
+
+# Aceitar todas as mudanças de uma vez
+cargo insta accept
+```
+
+A crate suporta dois modos de asserção:
+
+```rust
+// Snapshot armazenada em arquivo (tests/snapshots/)
+assert_snapshot!(tag("xNome", &[], "Test Company".into()));
+
+// Snapshot inline (valor esperado no próprio código)
+assert_snapshot!(format_cents_2(1050), @"10.50");
+```
+
+### Property Tests (proptest)
+
+Os 41 testes de propriedade utilizam [proptest](https://proptest-rs.github.io/proptest/) para verificar invariantes com entradas geradas aleatoriamente. Organizados em 5 blocos `proptest!`:
+
+| Módulo | Propriedades verificadas |
+|--------|--------------------------|
+| **format_utils** | Formato monetário sempre tem ponto decimal e N casas; zero produz `0.000...`; `format_cents_or_zero(None)` equivale a zero |
+| **xml_utils** | `escape_xml` nunca contém caracteres especiais crus; strings seguras passam inalteradas; `tag()` abre com `<` e fecha com `>` |
+| **tag roundtrip** | `extract_xml_tag_value(tag(name, text))` retorna o texto original escapado |
+| **tax_element** | Serialização com/sem `outer_tag`; `filter_fields` remove `None`s; `required_field(None)` retorna erro |
+| **state_codes** | UFs desconhecidas retornam erro; códigos IBGE desconhecidos retornam erro; associatividade e comutatividade de `merge_icms_totals` |
+
+Exemplo de estratégia de geração:
+
+```rust
+fn reasonable_cents() -> impl Strategy<Value = i64> {
+    -999_999_999i64..=999_999_999i64
+}
+
+fn safe_string() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9 ]{1,50}"
+}
+```
+
+### Fuzz Targets (cargo-fuzz)
+
+Os 5 alvos de fuzzing em `fuzz/fuzz_targets/` testam a robustez contra entradas arbitrárias e potencialmente maliciosas:
+
+| Alvo | O que faz fuzzing |
+|------|-------------------|
+| `fuzz_gtin_validation` | Validação de códigos GTIN (EAN-8, EAN-13, EAN-14) |
+| `fuzz_response_parsers` | Parsers de respostas SOAP da SEFAZ |
+| `fuzz_txt_to_xml` | Conversão de layouts TXT legados para XML |
+| `fuzz_xml_standardize` | Padronização/normalização de XML |
+| `fuzz_xml_tag_extraction` | Extração de valores de tags XML |
+
+```bash
+# Executar fuzzing (requer nightly)
+cargo +nightly fuzz run fuzz_xml_tag_extraction
+
+# Executar por tempo limitado (60 segundos)
+cargo +nightly fuzz run fuzz_gtin_validation -- -max_total_time=60
+```
+
+---
+
+## Infraestrutura de Testes
+
+### Módulo Comum (`tests/common/mod.rs`)
+
+Todos os testes de integração compartilham helpers via `mod common;`:
+
+```rust
+// Helpers de asserção XML
+expect_xml_tag_values(xml, &[("tag", "valor")]);
+expect_xml_contains(xml, &["substring1", "substring2"]);
+expect_xml_not_contains(xml, &["não-deve-existir"]);
+expect_wrapped_in(xml, "tagWrapper");
+
+// Fábricas de dados
+sample_issuer()        // Emitente Simples Nacional
+sample_issuer_normal() // Emitente Regime Normal
+sample_recipient()     // Destinatário CPF
+sample_item()          // Item com ICMS/PIS/COFINS
+sample_payment()       // Pagamento em dinheiro R$20,00
+sample_invoice_builder() // NFC-e em homologação
+```
+
+O `sample_invoice_builder()` retorna um `InvoiceBuilder` pré-configurado com emitente, item e pagamento no estado `Draft`, pronto para `.build()`.
+
+### Fixtures (`tests/fixtures/`)
+
+Arquivos de referência copiados das suítes de teste PHP:
+
+| Diretório | Conteúdo |
+|-----------|----------|
+| `fixtures/xml/` | XMLs de NF-e, NFC-e, CT-e, layouts v3.10 e v4.00 (com e sem assinatura, contingência) |
+| `fixtures/certs/` | Certificados PFX de teste (CNPJ e CPF, senha: `minhasenha`) |
+| `fixtures/schemes/` | Schemas XSD da SEFAZ |
+| `fixtures/txt/` | Arquivos TXT nos layouts legados SPED |
+
+O caminho para os fixtures é resolvido em tempo de compilação:
+
+```rust
+pub const FIXTURES_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+```
+
+### Crates de Teste
+
+O projeto utiliza as seguintes crates de teste:
+
+| Crate | Uso |
+|-------|-----|
+| [nextest](https://nexte.st/) | Executor de testes paralelo (CI e local) |
+| [insta](https://insta.rs/) | Testes de snapshot |
+| [proptest](https://proptest-rs.github.io/proptest/) | Testes de propriedade |
+| [rstest](https://docs.rs/rstest/) | Parametrização de testes (fixtures e `#[case]`) |
+| [pretty_assertions](https://docs.rs/pretty_assertions/) | Diffs coloridos em falhas de `assert_eq!` |
+| [cargo-fuzz](https://rust-fuzz.github.io/book/) | Fuzzing com libFuzzer |
+
+---
+
+## Executando os Testes
+
+### Suíte Completa
+
+```bash
+# Com nextest (recomendado -- execução paralela)
+cargo nextest run --all-features
+
+# Com cargo test padrão
+cargo test --all-features
+```
+
+### Doc Tests
+
+Doc tests não são capturados pelo nextest, então precisam ser executados separadamente:
+
+```bash
+cargo test --doc --all-features
+```
+
+### Arquivo Individual
+
+```bash
+# Executar apenas os testes de ICMS
+cargo nextest run --all-features -E 'test(tax_icms_test)'
+
+# Executar apenas os snapshot tests
+cargo nextest run --all-features -E 'test(snapshot_tests)'
+
+# Executar apenas os property tests
+cargo nextest run --all-features -E 'test(property_tests)'
+```
+
+### Teste Específico
+
+```bash
+# Executar um teste pelo nome
+cargo nextest run --all-features -E 'test(cst_00_regular_icms)'
+
+# Com cargo test
+cargo test --all-features cst_00_regular_icms
+```
+
+### Fuzzing
+
+```bash
+# Instalar cargo-fuzz (requer nightly)
+rustup install nightly
+cargo install cargo-fuzz
+
+# Listar alvos
+cargo +nightly fuzz list
+
+# Executar alvo específico
+cargo +nightly fuzz run fuzz_xml_tag_extraction
+```
+
+---
+
+## Padrões de Teste
+
+### Testes Portados com XML Inline
+
+Os testes portados frequentemente declaram XML de referência como constantes e verificam comportamento contra ele:
+
+```rust
+const NFE_REQUEST: &str = r##"<NFe xmlns="...">
+    <infNFe versao="4.00" Id="NFe4321...">
+        ...
+    </infNFe>
+</NFe>"##;
+
+#[test]
+fn test_to_authorize_nfe_valid() {
+    let protocoled = attach_protocol(NFE_REQUEST, RESPONSE)
+        .expect("should succeed");
+    assert!(protocoled.contains("143220000009921"));
+}
+```
+
+### Testes Parametrizados com rstest
+
+O `rstest` permite testar múltiplas variantes do mesmo cenário sem duplicação:
+
+```rust
+#[rstest]
+#[case("40", "<ICMS40>", "<CST>40</CST>")]
+#[case("41", "<ICMS40>", "<CST>41</CST>")]
+#[case("50", "<ICMS40>", "<CST>50</CST>")]
+fn cst_40_41_50_exempt_variants(
+    #[case] cst: &str,
+    #[case] expected_tag: &str,
+    #[case] expected_cst: &str,
+) {
+    // ... mesmo corpo para as 3 variantes
+}
+```
+
+### Snapshot Tests com Inline Values
+
+Para valores pequenos e estáveis, o `insta` suporta asserções inline:
+
+```rust
+#[test]
+fn snapshot_format_cents_1050() {
+    assert_snapshot!(format_cents_2(1050), @"10.50");
+}
+```
+
+Se o valor mudar, o teste falha e `cargo insta review` permite revisar e aceitar a mudança.
+
+### Property Tests com Invariantes
+
+Os testes de propriedade verificam que invariantes são mantidas para qualquer entrada gerada:
+
+```rust
+proptest! {
+    #[test]
+    fn escape_xml_never_contains_raw_special_chars(
+        input in "\\PC{1,100}"
+    ) {
+        let escaped = escape_xml(&input);
+        // Nenhum '<', '>', '"' ou '\'' pode aparecer cru
+        // '&' só pode aparecer como parte de entidade XML
+    }
+}
+```

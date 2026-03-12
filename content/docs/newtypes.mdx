@@ -1,0 +1,329 @@
+---
+title: Newtypes e Validação em Tempo de Compilação
+description: Como o fiscal-rs usa newtypes para aplicar a filosofia "parse, don't validate" — garantindo que valores fiscais como CNPJ, NCM, CFOP e GTIN sejam validados na construção e impossíveis de corromper depois.
+---
+
+## Filosofia: Parse, don't validate
+
+O fiscal-rs segue o princípio **"parse, don't validate"** (analise, não valide). A ideia central é:
+
+> Em vez de validar dados repetidamente ao longo do código, **analise-os uma única vez** na fronteira do sistema e encapsule o resultado em um tipo que **garante a validade por construção**.
+
+Na prática, isso significa que se você tem um `TaxId`, ele **com certeza** contém 11 ou 14 dígitos. Se você tem um `Ncm`, ele **com certeza** tem 8 dígitos. Não é necessário re-validar em nenhum outro lugar do código.
+
+```mermaid
+flowchart LR
+    E["Entrada bruta<br/>&str"] -->|"TaxId::new()"| V{Válido?}
+    V -->|Sim| T["TaxId<br/>(garantido válido)"]
+    V -->|Não| R["Err(FiscalError)"]
+
+    T --> X1["Gera XML"]
+    T --> X2["Calcula chave de acesso"]
+    T --> X3["Envia à SEFAZ"]
+
+    style T fill:#2d6a4f,color:#fff
+    style R fill:#d00000,color:#fff
+```
+
+## Hierarquia de tipos
+
+O módulo `newtypes` fornece tipos validados para cada domínio fiscal. Todos seguem o mesmo padrão: um construtor `new()` que retorna `Result<Self, FiscalError>`.
+
+```mermaid
+flowchart TB
+    subgraph "Valores monetários"
+        Cents["Cents(i64)<br/>R$ em centavos"]
+        Rate["Rate(i64)<br/>Alíquota × 100"]
+        Rate4["Rate4(i64)<br/>Alíquota × 10.000"]
+    end
+
+    subgraph "Identificadores fiscais"
+        TaxId["TaxId(String)<br/>CPF (11) ou CNPJ (14)"]
+        Gtin["Gtin(String)<br/>GTIN-8/12/13/14"]
+        Ncm["Ncm(String)<br/>8 dígitos"]
+        Cfop["Cfop(String)<br/>4 dígitos, 1º ∈ 1..7"]
+    end
+
+    subgraph "Códigos geográficos"
+        IbgeCode["IbgeCode(String)<br/>Código IBGE estado/município"]
+        StateCode["StateCode(&'static str)<br/>UF validada (27 estados)"]
+        AccessKey["AccessKey(String)<br/>44 dígitos com dígito verificador"]
+    end
+```
+
+## Cents: por que inteiros para dinheiro
+
+O tipo `Cents` armazena valores monetários como **inteiros em centavos** em vez de `f64`. Essa escolha elimina toda uma classe de bugs silenciosos.
+
+### O problema com f64
+
+```rust
+// f64: resultado INCORRETO
+let a: f64 = 0.1 + 0.2;
+assert_eq!(a, 0.3); // FALHA! a = 0.30000000000000004
+
+// Cents: resultado CORRETO
+let a = Cents(10) + Cents(20);
+assert_eq!(a, Cents(30)); // ✓ sempre exato
+```
+
+Em documentos fiscais, um erro de centavo pode causar rejeição pela SEFAZ. Com `Cents`, a aritmética é **exata**:
+
+```rust
+use fiscal_core::newtypes::Cents;
+
+let preco_unitario = Cents(1050);   // R$ 10,50
+let quantidade = 3;
+let total = Cents(preco_unitario.0 * quantidade); // R$ 31,50 = Cents(3150)
+
+// Display formata automaticamente com 2 casas decimais
+assert_eq!(total.to_string(), "31.50");
+assert_eq!(Cents(0).to_string(), "0.00");
+assert_eq!(Cents(-350).to_string(), "-3.50");
+```
+
+### Conversão para XML
+
+O trait `Display` de cada tipo numérico produz a representação exata exigida pelo schema da NF-e:
+
+| Tipo | Valor interno | Display | Uso no XML |
+|------|--------------|---------|------------|
+| `Cents(1050)` | `1050` | `"10.50"` | `<vProd>`, `<vNF>`, `<vBC>` |
+| `Rate(1800)` | `1800` | `"18.0000"` | `<pICMS>`, `<pIPI>` |
+| `Rate4(16500)` | `16500` | `"1.6500"` | `<pPIS>`, `<pCOFINS>` |
+
+## TaxId: CPF e CNPJ unificados
+
+O `TaxId` aceita CPF (11 dígitos) e CNPJ (14 dígitos) em um único tipo, removendo automaticamente formatação (pontos, traços, barras).
+
+```rust
+use fiscal_core::newtypes::TaxId;
+
+// CNPJ com formatação → dígitos puros
+let cnpj = TaxId::new("12.345.678/0001-95")?;
+assert_eq!(cnpj.digits(), "12345678000195");
+assert!(cnpj.is_cnpj());
+
+// CPF com formatação → dígitos puros
+let cpf = TaxId::new("123.456.789-01")?;
+assert_eq!(cpf.digits(), "12345678901");
+assert!(cpf.is_cpf());
+
+// Dígitos puros também aceitos
+let cnpj2 = TaxId::new("12345678000195")?;
+assert!(cnpj2.is_cnpj());
+```
+
+### Validação
+
+O `TaxId` valida apenas a **quantidade de dígitos** (11 ou 14). A validação de dígito verificador é intencionalmente omitida para suportar CNPJs sintéticos em ambientes de homologação.
+
+```rust
+// Erros de validação:
+TaxId::new("")?;            // Err: 0 dígitos
+TaxId::new("1234567890")?;  // Err: 10 dígitos (nem CPF nem CNPJ)
+TaxId::new("abcdefghijk")?; // Err: 0 dígitos após filtrar não-dígitos
+```
+
+### Uso no XML
+
+O `TaxId` é utilizado em múltiplos pontos do XML da NF-e:
+
+- `<emit>` (emitente)
+- `<dest>` (destinatário)
+- `<retirada>` e `<entrega>` (locais de retirada/entrega)
+- `<autXML>` (downloads autorizados)
+- Envelopes de eventos (cancelamento, carta de correção)
+
+## Gtin: código de barras validado
+
+O `Gtin` valida códigos de barras nos formatos GTIN-8, GTIN-12, GTIN-13 e GTIN-14, incluindo verificação do **dígito verificador**. Também aceita o valor especial `"SEM GTIN"`, muito comum em NF-e para produtos sem código de barras.
+
+```rust
+use fiscal_core::newtypes::Gtin;
+
+// EAN-13 válido (dígito verificador correto)
+let ean = Gtin::new("7891000315507")?;
+assert_eq!(ean.as_str(), "7891000315507");
+
+// Produto sem código de barras
+let sem = Gtin::new("SEM GTIN")?;
+assert!(sem.is_sem_gtin());
+
+// Erros de validação:
+Gtin::new("7891000315508")?;  // Err: dígito verificador inválido (8 em vez de 7)
+Gtin::new("1234567890")?;     // Err: 10 dígitos (tamanho inválido)
+Gtin::new("ABC12345")?;       // Err: caracteres não numéricos
+```
+
+## Ncm: Nomenclatura Comum do Mercosul
+
+O `Ncm` valida que o código tenha exatamente **8 dígitos** ASCII. O valor `"00000000"` é válido e usado para serviços.
+
+```rust
+use fiscal_core::newtypes::Ncm;
+
+let ncm = Ncm::new("22021000")?;    // Refrigerantes
+assert_eq!(ncm.as_str(), "22021000");
+
+let servico = Ncm::new("00000000")?; // Serviços
+assert_eq!(servico.as_str(), "00000000");
+
+// Erros de validação:
+Ncm::new("2202100")?;   // Err: 7 dígitos (muito curto)
+Ncm::new("220210001")?; // Err: 9 dígitos (muito longo)
+Ncm::new("2202100A")?;  // Err: contém letra
+```
+
+### Estrutura do NCM
+
+O NCM segue a classificação do Mercosul. Os 8 dígitos representam:
+
+| Posição | Significado | Exemplo (22021000) |
+|---------|-------------|-------------------|
+| 1-2 | Capítulo | `22` = Bebidas |
+| 3-4 | Posição | `02` = Águas, incluindo mineral |
+| 5-6 | Subposição | `10` = Com adição de açúcar |
+| 7-8 | Item/subitem | `00` = Genérico |
+
+## Cfop: Código Fiscal de Operações e Prestações
+
+O `Cfop` valida que o código tenha **4 dígitos** e que o primeiro dígito esteja no intervalo 1-7. O primeiro dígito determina a direção da operação:
+
+```rust
+use fiscal_core::newtypes::Cfop;
+
+// Saída (venda) dentro do estado
+let cfop = Cfop::new("5102")?;
+assert!(cfop.is_saida());
+assert!(!cfop.is_entrada());
+
+// Entrada (compra) interestadual
+let cfop2 = Cfop::new("2102")?;
+assert!(cfop2.is_entrada());
+```
+
+### Tabela de primeiro dígito
+
+| Dígito | Direção | Escopo |
+|--------|---------|--------|
+| **1** | Entrada | Dentro do estado |
+| **2** | Entrada | Interestadual |
+| **3** | Entrada | Exterior |
+| **4** | (reservado) | - |
+| **5** | Saída | Dentro do estado |
+| **6** | Saída | Interestadual |
+| **7** | Saída | Exterior |
+
+```rust
+// Erros de validação:
+Cfop::new("0102")?;  // Err: primeiro dígito 0
+Cfop::new("8102")?;  // Err: primeiro dígito 8
+Cfop::new("510")?;   // Err: 3 dígitos (muito curto)
+Cfop::new("51A2")?;  // Err: contém letra
+```
+
+## IbgeCode: código IBGE de estado e município
+
+O `IbgeCode` armazena códigos numéricos do IBGE usados para identificar estados (2 dígitos) e municípios (7 dígitos) no XML da NF-e.
+
+```rust
+use fiscal_core::newtypes::IbgeCode;
+
+// Código de município (São Paulo)
+let sp = IbgeCode("3550308".to_string());
+assert_eq!(sp.to_string(), "3550308");
+
+// Código de estado (Paraná)
+let pr = IbgeCode("41".to_string());
+assert_eq!(pr.to_string(), "41");
+```
+
+Para validação de UF (unidade federativa), o tipo `StateCode` verifica contra a tabela oficial dos 27 estados:
+
+```rust
+use fiscal_core::newtypes::StateCode;
+
+let sc = StateCode::new("PR")?;       // ✓ Paraná
+assert_eq!(sc.ibge_code(), "41");
+
+StateCode::new("XX")?;                // Err: estado desconhecido
+```
+
+## AccessKey: chave de acesso de 44 dígitos
+
+O `AccessKey` valida que a chave tenha exatamente 44 dígitos ASCII e oferece acessores para cada campo posicional:
+
+```rust
+use fiscal_core::newtypes::AccessKey;
+
+let chave = AccessKey::new("43250304123456789012550010000000011000000010")?;
+
+assert_eq!(chave.state_code(), "43");              // RS
+assert_eq!(chave.year_month(), "2503");             // março/2025
+assert_eq!(chave.tax_id(), "04123456789012");       // CNPJ
+assert_eq!(chave.model(), "55");                    // NF-e
+assert_eq!(chave.series(), "001");
+assert_eq!(chave.number(), "000000001");
+assert_eq!(chave.emission_type(), "1");             // Normal
+assert_eq!(chave.numeric_code(), "00000001");
+assert_eq!(chave.check_digit(), "0");
+```
+
+### Layout da chave
+
+```
+43 2503 04123456789012 55 001 000000001 1 00000001 0
+── ──── ────────────── ── ─── ───────── ─ ──────── ─
+cUF AAMM     CNPJ      mod ser   nNF  tpE  cNF   DV
+```
+
+## Fluxo de validação completo
+
+Este diagrama mostra como os newtypes se encaixam no fluxo de construção de uma NF-e:
+
+```mermaid
+flowchart TB
+    Input["Dados brutos do sistema"] --> V1["TaxId::new(cnpj)?"]
+    Input --> V2["Ncm::new(ncm)?"]
+    Input --> V3["Cfop::new(cfop)?"]
+    Input --> V4["Gtin::new(ean)?"]
+    Input --> V5["Cents(valor_centavos)"]
+
+    V1 --> Issuer["IssuerData::new(...)"]
+    V5 --> Item["InvoiceItemData::new(...)"]
+    V2 --> Item
+    V3 --> Item
+    V4 --> Item
+
+    Issuer --> Builder["InvoiceBuilder::new(issuer, env, model)"]
+    Item --> Builder
+
+    Builder --> Build[".build()?"]
+    Build --> AK["AccessKey (44 dígitos)<br/>gerada automaticamente"]
+    Build --> XML["XML NF-e válido"]
+
+    style V1 fill:#2d6a4f,color:#fff
+    style V2 fill:#2d6a4f,color:#fff
+    style V3 fill:#2d6a4f,color:#fff
+    style V4 fill:#2d6a4f,color:#fff
+    style V5 fill:#2d6a4f,color:#fff
+    style AK fill:#1b4332,color:#fff
+```
+
+## Resumo dos newtypes
+
+| Tipo | Valor interno | Validação | Display |
+|------|--------------|-----------|---------|
+| `Cents` | `i64` | Nenhuma (wrapper direto) | `"10.50"` |
+| `Rate` | `i64` | Nenhuma (wrapper direto) | `"18.0000"` |
+| `Rate4` | `i64` | Nenhuma (wrapper direto) | `"1.6500"` |
+| `TaxId` | `String` | 11 ou 14 dígitos, strip formatação | `"12345678000195"` |
+| `Gtin` | `String` | GTIN-8/12/13/14 + check digit, ou `"SEM GTIN"` | `"7891000315507"` |
+| `Ncm` | `String` | Exatamente 8 dígitos | `"22021000"` |
+| `Cfop` | `String` | 4 dígitos, 1o dígito 1-7 | `"5102"` |
+| `IbgeCode` | `String` | Nenhuma (wrapper semântico) | `"3550308"` |
+| `StateCode` | `&'static str` | UF contra tabela dos 27 estados | `"PR"` |
+| `AccessKey` | `String` | Exatamente 44 dígitos ASCII | `"43250304..."` |
+
+Todos os tipos implementam `Debug`, `Clone`, `Display`, `PartialEq`, `Eq` e `Hash`, permitindo uso como chaves de mapa, em assertions e em logs sem conversão manual.

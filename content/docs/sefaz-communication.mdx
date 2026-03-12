@@ -1,0 +1,498 @@
+---
+title: Comunicação com SEFAZ
+description: Deep dive na comunicação com os webservices SEFAZ — ciclo de vida da requisição, catálogo de serviços, resolução de URLs por estado e parsing de respostas SOAP.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+## Visão Geral
+
+A SEFAZ (Secretaria da Fazenda) é o webservice da autoridade tributária brasileira responsável pela autorização, consulta e gerenciamento de documentos fiscais eletrônicos (NF-e/NFC-e). O crate `fiscal-sefaz` implementa toda a comunicação com esses webservices utilizando **SOAP 1.2 sobre HTTPS com TLS mútuo** (certificado digital A1).
+
+Cada estado brasileiro possui seu próprio autorizador SEFAZ ou delega para uma SEFAZ Virtual (SVRS ou SVAN). O `fiscal-sefaz` abstrai completamente essa complexidade — basta informar a UF e o ambiente.
+
+### Módulos do crate
+
+| Módulo | Responsabilidade |
+|--------|------------------|
+| `client` | Client HTTP async com mTLS via `reqwest` |
+| `soap` | Construção do envelope SOAP 1.2 |
+| `services` | Metadados SOAP de cada serviço (método, operação, versão) |
+| `urls` | Resolução de URLs por estado, serviço e ambiente |
+| `request_builders` | Construção do XML de requisição para cada operação |
+| `response_parsers` | Parsing das respostas XML da SEFAZ |
+
+## Ciclo de Vida da Requisição
+
+O fluxo completo de uma requisição à SEFAZ segue quatro etapas principais: construir o XML de requisição, encapsulá-lo em um envelope SOAP, enviar via HTTPS com mTLS, e parsear a resposta.
+
+```mermaid
+sequenceDiagram
+    participant App as Aplicação
+    participant Client as SefazClient
+    participant Builder as request_builders
+    participant SOAP as soap::build_envelope
+    participant URLs as urls::get_sefaz_url
+    participant SEFAZ as SEFAZ (Governo)
+    participant Parser as response_parsers
+
+    App->>Client: client.authorize(uf, env, xml, lot_id)
+    Client->>Builder: build_autorizacao_request(xml, lot_id, sync)
+    Builder-->>Client: XML <enviNFe>
+
+    Client->>URLs: get_sefaz_url(uf, env, "NfeAutorizacao")
+    URLs-->>Client: URL do endpoint
+
+    Client->>SOAP: build_envelope(request_xml, uf, meta)
+    SOAP-->>Client: Envelope SOAP 1.2
+
+    Client->>SEFAZ: POST HTTPS (mTLS) + Content-Type: application/soap+xml
+    SEFAZ-->>Client: Resposta SOAP XML
+
+    Client->>Parser: parse_autorizacao_response(xml)
+    Parser-->>Client: AuthorizationResponse
+
+    Client-->>App: Result<AuthorizationResponse, FiscalError>
+```
+
+### Etapa 1 — Construção do XML de Requisição
+
+Os `request_builders` geram o XML interno de cada operação, conforme o schema da SEFAZ. Cada builder recebe os parâmetros da operação e retorna uma `String` XML.
+
+```rust
+use fiscal_sefaz::request_builders::build_status_request;
+use fiscal_core::types::SefazEnvironment;
+
+let xml = build_status_request("SP", SefazEnvironment::Homologation);
+// Gera: <consStatServ xmlns="..." versao="4.00">
+//         <tpAmb>2</tpAmb><cUF>35</cUF><xServ>STATUS</xServ>
+//       </consStatServ>
+```
+
+### Etapa 2 — Encapsulamento SOAP
+
+O módulo `soap` encapsula o XML da requisição em um envelope SOAP 1.2 com os headers exigidos pela SEFAZ:
+
+```xml
+<soap12:Envelope xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
+  <soap12:Header>
+    <nfeCabecMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/{operation}">
+      <cUF>{codigo_ibge}</cUF>
+      <versaoDados>{versao}</versaoDados>
+    </nfeCabecMsg>
+  </soap12:Header>
+  <soap12:Body>
+    <nfeDadosMsg xmlns="http://www.portalfiscal.inf.br/nfe/wsdl/{operation}">
+      {request_xml}
+    </nfeDadosMsg>
+  </soap12:Body>
+</soap12:Envelope>
+```
+
+O header SOAP `Content-Type` também inclui a SOAP Action, construída no formato:
+
+```
+application/soap+xml;charset=utf-8;action="http://www.portalfiscal.inf.br/nfe/wsdl/{operation}/{method}"
+```
+
+### Etapa 3 — Envio via mTLS
+
+O `SefazClient` utiliza `reqwest` com identidade PKCS#12 (certificado A1) para autenticação mTLS. O TLS 1.2 é o mínimo exigido pela SEFAZ.
+
+```rust
+use fiscal_sefaz::client::SefazClient;
+
+let pfx = std::fs::read("certificado.pfx").unwrap();
+let client = SefazClient::new(&pfx, "senha")?;
+```
+
+Timeouts padrão:
+- **Conexão**: 30 segundos
+- **Requisição completa**: 90 segundos (horários de pico podem ser lentos)
+
+### Etapa 4 — Parsing da Resposta
+
+Os parsers removem automaticamente o envelope SOAP e prefixos de namespace (`nfe:`, `nfeResultMsg:`) da resposta, extraindo as informações relevantes em structs tipadas.
+
+```rust
+use fiscal_sefaz::response_parsers::parse_autorizacao_response;
+
+let resp = parse_autorizacao_response(&raw_xml)?;
+println!("Status: {} — {}", resp.status_code, resp.status_message);
+if let Some(prot) = &resp.protocol_number {
+    println!("Protocolo: {prot}");
+}
+```
+
+## Catálogo de Serviços
+
+O enum `SefazService` define todos os serviços disponíveis, cada um com seus metadados SOAP fixos (método, operação WSDL, versão do schema):
+
+```mermaid
+graph LR
+    subgraph "SefazService"
+        SS["StatusServico"]
+        AU["Autorizacao"]
+        RA["RetAutorizacao"]
+        CP["ConsultaProtocolo"]
+        IN["Inutilizacao"]
+        RE["RecepcaoEvento"]
+        DD["DistribuicaoDFe"]
+        CC["ConsultaCadastro"]
+    end
+
+    SS -->|"method"| M1["nfeStatusServicoNF"]
+    AU -->|"method"| M2["nfeAutorizacaoLote"]
+    RA -->|"method"| M3["nfeRetAutorizacaoLote"]
+    CP -->|"method"| M4["nfeConsultaNF"]
+    IN -->|"method"| M5["nfeInutilizacaoNF"]
+    RE -->|"method"| M6["nfeRecepcaoEvento"]
+    DD -->|"method"| M7["nfeDistDFeInteresse"]
+    CC -->|"method"| M8["consultaCadastro"]
+```
+
+### Tabela Completa de Metadados
+
+| Serviço | Operação WSDL | Método SOAP | Versão | Chave URL |
+|---------|---------------|-------------|--------|-----------|
+| `StatusServico` | `NFeStatusServico4` | `nfeStatusServicoNF` | `4.00` | `NfeStatusServico` |
+| `Autorizacao` | `NFeAutorizacao4` | `nfeAutorizacaoLote` | `4.00` | `NfeAutorizacao` |
+| `RetAutorizacao` | `NFeRetAutorizacao4` | `nfeRetAutorizacaoLote` | `4.00` | `NfeRetAutorizacao` |
+| `ConsultaProtocolo` | `NFeConsultaProtocolo4` | `nfeConsultaNF` | `4.00` | `NfeConsultaProtocolo` |
+| `Inutilizacao` | `NFeInutilizacao4` | `nfeInutilizacaoNF` | `4.00` | `NfeInutilizacao` |
+| `RecepcaoEvento` | `NFeRecepcaoEvento4` | `nfeRecepcaoEvento` | `1.00` | `RecepcaoEvento` |
+| `DistribuicaoDFe` | `NFeDistribuicaoDFe` | `nfeDistDFeInteresse` | `1.01` | `NfeDistribuicaoDFe` |
+| `ConsultaCadastro` | `CadConsultaCadastro4` | `consultaCadastro` | `2.00` | `NfeConsultaCadastro` |
+
+Cada variante expõe seus metadados via `SefazService::meta()`:
+
+```rust
+use fiscal_sefaz::services::SefazService;
+
+let meta = SefazService::Autorizacao.meta();
+assert_eq!(meta.method, "nfeAutorizacaoLote");
+assert_eq!(meta.operation, "NFeAutorizacao4");
+assert_eq!(meta.version, "4.00");
+```
+
+## Resolução de URLs por Estado
+
+A SEFAZ brasileira não é um servidor centralizado. Cada estado possui seu próprio autorizador ou delega para uma SEFAZ Virtual. O módulo `urls` mapeia cada UF ao autorizador correto e resolve a URL do endpoint para cada serviço e ambiente.
+
+### Mapeamento de Autorizadores
+
+| Autorizador | Estados |
+|-------------|---------|
+| **AM** | Amazonas |
+| **BA** | Bahia |
+| **GO** | Goiás |
+| **MG** | Minas Gerais |
+| **MS** | Mato Grosso do Sul |
+| **MT** | Mato Grosso |
+| **PE** | Pernambuco |
+| **PR** | Paraná |
+| **RS** | Rio Grande do Sul |
+| **SP** | São Paulo |
+| **SVAN** | Maranhão (MA) |
+| **SVRS** | AC, AL, AP, CE, DF, ES, PA, PB, PI, RJ, RN, RO, RR, SC, SE, TO |
+
+<Callout type="info">
+Os 17 estados que não possuem autorizador próprio utilizam a **SVRS** (SEFAZ Virtual do Rio Grande do Sul). O Maranhão é o único estado que utiliza a **SVAN** (SEFAZ Virtual do Ambiente Nacional).
+</Callout>
+
+### Ambientes
+
+Cada autorizador expõe endpoints separados para produção e homologação:
+
+| Ambiente | `SefazEnvironment` | Prefixo típico da URL |
+|----------|--------------------|-----------------------|
+| Produção | `Production` | `nfe.sefaz.XX.gov.br` |
+| Homologação | `Homologation` | `homnfe.sefaz.XX.gov.br` ou `homologacao.nfe...` |
+
+### Uso da API
+
+```rust
+use fiscal_sefaz::urls::get_sefaz_url;
+use fiscal_core::types::SefazEnvironment;
+
+// Autorização em SP (produção)
+let url = get_sefaz_url("SP", SefazEnvironment::Production, "NfeAutorizacao")?;
+// → "https://nfe.fazenda.sp.gov.br/ws/nfeautorizacao4.asmx"
+
+// Status em AL (via SVRS, homologação)
+let url = get_sefaz_url("AL", SefazEnvironment::Homologation, "NfeStatusServico")?;
+// → "https://nfe-homologacao.svrs.rs.gov.br/ws/NfeStatusServico/NfeStatusServico4.asmx"
+```
+
+A função retorna `FiscalError::InvalidStateCode` para UFs inválidas e `FiscalError::XmlGeneration` para nomes de serviço desconhecidos.
+
+## Construtores de Requisição
+
+O módulo `request_builders` fornece funções para construir o XML de cada operação. Todos seguem o padrão de receber parâmetros da operação e retornar uma `String` com o XML pronto.
+
+### Verificação de Status
+
+Verifica se o serviço da SEFAZ está operacional para uma determinada UF:
+
+```rust
+use fiscal_sefaz::request_builders::build_status_request;
+
+let xml = build_status_request("SP", SefazEnvironment::Production);
+// → <consStatServ xmlns="..." versao="4.00">
+//     <tpAmb>1</tpAmb><cUF>35</cUF><xServ>STATUS</xServ>
+//   </consStatServ>
+```
+
+### Autorização de NF-e
+
+Envia uma NF-e assinada para autorização. O XML assinado é encapsulado em um envelope `<enviNFe>`:
+
+```rust
+use fiscal_sefaz::request_builders::build_autorizacao_request;
+
+let xml = build_autorizacao_request(&signed_nfe_xml, "123456", true, false);
+// sync=true → indSinc=1 (processamento síncrono, resultado imediato)
+```
+
+### Consulta por Chave de Acesso
+
+Consulta o status de uma NF-e pela chave de acesso de 44 dígitos:
+
+```rust
+use fiscal_sefaz::request_builders::build_consulta_request;
+
+let xml = build_consulta_request("35240100000000000100550010000000011000000019", env);
+```
+
+### Consulta de Recibo
+
+Consulta o resultado de um lote enviado de forma assíncrona (`indSinc=0`):
+
+```rust
+use fiscal_sefaz::request_builders::build_consulta_recibo_request;
+
+let xml = build_consulta_recibo_request("351000000123456", env);
+```
+
+### Inutilização de Numeração
+
+Inutiliza uma faixa de números que foram pulados e não serão utilizados:
+
+```rust
+use fiscal_sefaz::request_builders::build_inutilizacao_request;
+
+let xml = build_inutilizacao_request(
+    24,                          // ano (2 dígitos)
+    "12345678000199",            // CNPJ
+    "55",                        // modelo (55=NF-e, 65=NFC-e)
+    1,                           // série
+    100,                         // número inicial
+    110,                         // número final
+    "Falha no sistema de emissão", // justificativa
+    SefazEnvironment::Production,
+    "SP",
+);
+```
+
+### Cancelamento
+
+Cancela uma NF-e previamente autorizada:
+
+```rust
+use fiscal_sefaz::request_builders::build_cancela_request;
+
+let xml = build_cancela_request(
+    "35240100000000000100550010000000011000000019", // chave de acesso
+    "135240000012345",                              // número do protocolo
+    "Erro na emissão do documento fiscal",          // justificativa (mín. 15 chars)
+    1,                                               // sequência do evento
+    SefazEnvironment::Production,
+    "12345678000199",                                // CNPJ
+);
+```
+
+### Carta de Correção (CC-e)
+
+Envia uma correção textual para uma NF-e autorizada:
+
+```rust
+use fiscal_sefaz::request_builders::build_cce_request;
+
+let xml = build_cce_request(
+    "35240100000000000100550010000000011000000019",
+    "Razão social do destinatário correto: Empresa XYZ Ltda",
+    1,  // nSeqEvento (incrementa a cada correção na mesma NF-e)
+    SefazEnvironment::Production,
+    "12345678000199",
+);
+```
+
+### Manifestação do Destinatário
+
+Registra eventos de manifestação do destinatário sobre notas recebidas:
+
+```rust
+use fiscal_sefaz::request_builders::build_manifesta_request;
+
+let xml = build_manifesta_request(
+    &access_key,
+    "210200",      // Confirmação da Operação
+    None,          // justificativa (obrigatória apenas para 210240)
+    1,
+    env,
+    &tax_id,
+);
+```
+
+### Distribuição de DF-e
+
+Consulta documentos fiscais distribuídos pelo ambiente nacional:
+
+```rust
+use fiscal_sefaz::request_builders::build_dist_dfe_request;
+
+// Por último NSU
+let xml = build_dist_dfe_request("SP", "12345678000199", None, None, env);
+
+// Por chave de acesso específica
+let xml = build_dist_dfe_request("SP", "12345678000199", None, Some(&access_key), env);
+```
+
+### Consulta Cadastral
+
+Consulta o cadastro de contribuintes por CNPJ, CPF ou Inscrição Estadual:
+
+```rust
+use fiscal_sefaz::request_builders::build_cadastro_request;
+
+let xml = build_cadastro_request("SP", "CNPJ", "12345678000199");
+```
+
+## Tipos de Evento
+
+Os constantes de tipo de evento (`tpEvento`) estão definidas no módulo `request_builders::event_types`:
+
+| Código | Constante | Descrição |
+|--------|-----------|-----------|
+| `110110` | `CCE` | Carta de Correção Eletrônica |
+| `110111` | `CANCELLATION` | Cancelamento |
+| `210200` | `CONFIRMATION` | Confirmação da Operação |
+| `210210` | `AWARENESS` | Ciência da Operação |
+| `210220` | `UNKNOWN_OPERATION` | Desconhecimento da Operação |
+| `210240` | `OPERATION_NOT_PERFORMED` | Operação não Realizada |
+
+Todos os eventos seguem a mesma estrutura XML interna `<envEvento>`, com variações apenas nos campos de `<detEvento>`.
+
+## Parsing de Respostas
+
+O módulo `response_parsers` fornece parsers tipados para as respostas mais comuns:
+
+### Structs de Resposta
+
+**`AuthorizationResponse`** — resposta de autorização (`retEnviNFe`):
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `status_code` | `String` | Código de status (`cStat`) |
+| `status_message` | `String` | Mensagem descritiva (`xMotivo`) |
+| `protocol_number` | `Option<String>` | Número do protocolo (`nProt`) |
+| `protocol_xml` | `Option<String>` | Fragmento XML do `<protNFe>` |
+| `authorized_at` | `Option<String>` | Timestamp da autorização (`dhRecbto`) |
+
+**`StatusResponse`** — resposta de status do serviço (`retConsStatServ`):
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `status_code` | `String` | Código de status (`cStat`) |
+| `status_message` | `String` | Mensagem descritiva (`xMotivo`) |
+| `average_time` | `Option<String>` | Tempo médio de processamento (`tMed`) |
+
+**`CancellationResponse`** — resposta de evento de cancelamento (`retEvento`):
+
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `status_code` | `String` | Código de status (`cStat`) |
+| `status_message` | `String` | Mensagem descritiva (`xMotivo`) |
+| `protocol_number` | `Option<String>` | Número do protocolo (`nProt`) |
+
+### Remoção Automática do Envelope SOAP
+
+Os parsers tratam automaticamente respostas encapsuladas em SOAP:
+
+```xml
+<!-- Resposta real da SEFAZ (com envelope SOAP e prefixos) -->
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <nfe:retConsStatServ xmlns:nfe="http://www.portalfiscal.inf.br/nfe">
+      <nfe:cStat>107</nfe:cStat>
+      <nfe:xMotivo>Servico em Operacao</nfe:xMotivo>
+    </nfe:retConsStatServ>
+  </soap:Body>
+</soap:Envelope>
+```
+
+O parser remove os prefixos `soap:`, `nfe:` e `nfeResultMsg:` automaticamente, extraindo os valores das tags por nome local.
+
+## SefazClient — Métodos de Conveniência
+
+O `SefazClient` combina todas as etapas (build, SOAP, envio, parse) em métodos de conveniência tipados:
+
+```rust
+use fiscal_sefaz::client::SefazClient;
+use fiscal_core::types::SefazEnvironment;
+
+let pfx = std::fs::read("certificado.pfx")?;
+let client = SefazClient::new(&pfx, "senha")?;
+let env = SefazEnvironment::Homologation;
+
+// Verificar status
+let status = client.status("SP", env).await?;
+
+// Autorizar NF-e
+let auth = client.authorize("SP", env, &signed_xml, "123").await?;
+
+// Consultar por chave de acesso
+let consulta = client.consult("SP", env, &access_key).await?;
+
+// Consultar recibo (autorização assíncrona)
+let recibo = client.consult_receipt("SP", env, "351000000123456").await?;
+
+// Cancelar NF-e
+let cancel = client.cancel("SP", env, &access_key, &protocol, "Justificativa", &cnpj).await?;
+
+// Carta de Correção
+let cce = client.cce("SP", env, &access_key, "Texto da correção", 1, &cnpj).await?;
+
+// Inutilizar numeração (requer XML pré-assinado)
+let raw = client.inutilize("SP", env, &signed_inut_xml).await?;
+```
+
+<Callout type="warn">
+O método `send()` de baixo nível está disponível como escape hatch para serviços que ainda não possuem método de conveniência tipado (ex: `DistribuicaoDFe`, `ConsultaCadastro`).
+</Callout>
+
+## Códigos de Status Comuns
+
+| `cStat` | Significado |
+|---------|-------------|
+| `100` | Autorizado o uso da NF-e |
+| `104` | Lote processado |
+| `105` | Lote em processamento |
+| `107` | Serviço em Operação |
+| `135` | Evento registrado e vinculado à NF-e |
+| `204` | Duplicidade de NF-e |
+| `217` | NF-e não encontrada |
+| `539` | Duplicidade de evento |
+
+## Tratamento de Erros
+
+Todos os métodos retornam `Result<T, FiscalError>`. Os erros possíveis são:
+
+| Variante | Quando ocorre |
+|----------|---------------|
+| `FiscalError::InvalidStateCode` | UF inválida |
+| `FiscalError::Certificate` | Falha ao carregar PFX ou senha incorreta |
+| `FiscalError::Network` | Falha de conexão, timeout, TLS ou HTTP não-2xx |
+| `FiscalError::XmlParsing` | Resposta malformada (sem `<cStat>`) |
+| `FiscalError::XmlGeneration` | Serviço desconhecido ou `<Signature>` não encontrado |
+| `FiscalError::MissingRequiredField` | Campo obrigatório ausente na requisição |

@@ -1,0 +1,509 @@
+---
+title: Fluxo Completo de Emissão
+description: Guia passo a passo do ciclo de vida completo de um documento fiscal eletrônico no fiscal-rs — da configuração à persistência.
+---
+
+O processo de emissão de uma NF-e ou NFC-e envolve cinco etapas principais: **configurar**, **construir**, **assinar**, **transmitir** e **armazenar**. O `fiscal-rs` distribui essas responsabilidades entre três crates, cada um isolado em sua função.
+
+## Visão geral do fluxo
+
+```mermaid
+flowchart TD
+    A["1. Configurar dados\n(IssuerData, itens, pagamentos)"] --> B["2. Construir XML\nInvoiceBuilder::new() → .build()"]
+    B --> C{"Validação\nok?"}
+    C -- "Err" --> E1["FiscalError::InvalidTaxData\nFiscalError::MissingRequiredField"]
+    C -- "Ok" --> D["InvoiceBuilder‹Built›\n.xml() / .access_key()"]
+    D --> F["3. Assinar XML\n.sign_with(|xml| sign_xml(...))"]
+    F --> G{"Assinatura\nok?"}
+    G -- "Err" --> E2["FiscalError::Certificate"]
+    G -- "Ok" --> H["InvoiceBuilder‹Signed›\n.signed_xml()"]
+    H --> I["4. Transmitir ao SEFAZ\nSefazClient::authorize()"]
+    I --> J{"Resposta\nSEFAZ"}
+    J -- "cStat 100/150" --> K["Autorizada"]
+    J -- "cStat 110/301-303" --> L["Denegada"]
+    J -- "Outro código" --> M["Rejeitada"]
+    J -- "Timeout/Rede" --> N["Contingência"]
+    K --> O["5. Armazenar\nattach_protocol() → nfeProc"]
+
+    style A fill:#e8f5e9
+    style H fill:#e3f2fd
+    style K fill:#c8e6c9
+    style L fill:#ffcdd2
+    style M fill:#ffcdd2
+    style N fill:#fff9c4
+```
+
+## Interação entre os crates
+
+```mermaid
+sequenceDiagram
+    participant App as Aplicação
+    participant Core as fiscal-core
+    participant Crypto as fiscal-crypto
+    participant Sefaz as fiscal-sefaz
+
+    App->>Core: InvoiceBuilder::new(issuer, env, model)
+    App->>Core: .series(1).invoice_number(42)
+    App->>Core: .add_item(item).payments(pagamentos)
+    App->>Core: .build()
+    Core-->>App: InvoiceBuilder‹Built› (XML + chave de acesso)
+
+    App->>Crypto: load_certificate(&pfx, "senha")
+    Crypto-->>App: CertificateData (PEM priv + cert)
+    App->>Core: .sign_with(|xml| ...)
+    Note over App,Crypto: Dentro do closure, chama sign_xml()
+    App->>Crypto: sign_xml(xml, &priv_key, &cert)
+    Crypto-->>App: XML assinado (com ‹Signature›)
+    Core-->>App: InvoiceBuilder‹Signed›
+
+    App->>Sefaz: SefazClient::new(&pfx, "senha")
+    Sefaz-->>App: SefazClient (mTLS configurado)
+    App->>Sefaz: client.authorize("SP", env, signed_xml, lot_id)
+    Sefaz->>Sefaz: build_autorizacao_request() + SOAP envelope
+    Sefaz-->>App: AuthorizationResponse (cStat, protocolo, XML)
+
+    App->>Core: attach_protocol(request_xml, response_xml)
+    Core-->>App: nfeProc XML (pronto para armazenamento)
+```
+
+## Etapa 1 — Configurar os dados
+
+Antes de construir o XML, prepare as estruturas de dados do emissor, destinatário, itens e pagamentos.
+
+### Emissor (IssuerData)
+
+```rust
+use fiscal::types::*;
+use fiscal::newtypes::IbgeCode;
+
+let issuer = IssuerData::new(
+    "25028332000105",       // CNPJ
+    "140950881119",         // Inscrição Estadual
+    "Minha Empresa LTDA",   // Razão social
+    TaxRegime::SimplesNacional,
+    "SP",                   // UF
+    IbgeCode("3550308".to_string()), // Código IBGE do município
+    "Sao Paulo",            // Nome do município
+    "Av Paulista",          // Logradouro
+    "1000",                 // Número
+    "Bela Vista",           // Bairro
+    "01310100",             // CEP
+)
+.trade_name("Minha Loja");
+```
+
+### Destinatário (RecipientData) — obrigatório para NF-e
+
+```rust
+let recipient = RecipientData::new("17812455000295", "Cliente LTDA")
+    .state_tax_id("142304338112")
+    .street("Rua do Cliente")
+    .street_number("200")
+    .district("Centro")
+    .city_code(IbgeCode::new("3550308"))
+    .city_name("SAO PAULO")
+    .state_code("SP")
+    .zip_code("05302001");
+```
+
+> Para NFC-e com valor inferior a R$200,00, o destinatário é opcional.
+
+### Itens (InvoiceItemData)
+
+```rust
+use fiscal::newtypes::{Cents, Rate};
+
+let item = InvoiceItemData::new(
+    1,                  // número do item (nItem)
+    "001",              // código do produto (cProd)
+    "Produto Exemplo",  // descrição
+    "84715010",         // NCM
+    "5102",             // CFOP — venda interna
+    "UN",               // unidade
+    1.0,                // quantidade
+    Cents(10000),       // valor unitário (R$100,00)
+    Cents(10000),       // valor total
+    "102",              // CST ICMS (Simples Nacional)
+    Rate(0),            // alíquota ICMS
+    Cents(0),           // base de cálculo ICMS
+    "99",               // CST PIS
+    "99",               // CST COFINS
+);
+```
+
+### Pagamentos (PaymentData)
+
+```rust
+// Código "01" = Dinheiro, "03" = Cartão de Crédito, "04" = Cartão de Débito
+let pagamento_dinheiro = PaymentData::new("01", Cents(10000));
+let pagamento_cartao  = PaymentData::new("03", Cents(5000));
+```
+
+## Etapa 2 — Construir o XML (InvoiceBuilder)
+
+O `InvoiceBuilder` usa o padrão **typestate**: o compilador impede chamadas fora de ordem.
+
+```
+Draft  →  .build()  →  Built  →  .sign_with()  →  Signed
+```
+
+### NF-e (modelo 55)
+
+```rust
+use fiscal::xml_builder::InvoiceBuilder;
+
+let built = InvoiceBuilder::new(
+        issuer.clone(),
+        SefazEnvironment::Homologation,
+        InvoiceModel::Nfe,
+    )
+    .series(1)
+    .invoice_number(502)
+    .operation_nature("VENDA")
+    .recipient(recipient)
+    .items(vec![item])
+    .payments(vec![pagamento_dinheiro])
+    .build()?;
+
+// Disponível após build():
+println!("XML:   {}", built.xml());
+println!("Chave: {}", built.access_key()); // 44 dígitos
+```
+
+### NFC-e (modelo 65)
+
+```rust
+let built = InvoiceBuilder::new(
+        issuer.clone(),
+        SefazEnvironment::Homologation,
+        InvoiceModel::Nfce,
+    )
+    .series(1)
+    .invoice_number(1)
+    .add_item(item)
+    .payments(vec![pagamento_dinheiro])
+    .build()?;
+```
+
+### Tratamento de erros na construção
+
+O método `.build()` retorna `Result<InvoiceBuilder<Built>, FiscalError>`. Possíveis erros:
+
+| Variante do `FiscalError` | Causa |
+|---|---|
+| `InvalidTaxData(msg)` | CNPJ, IE ou código de estado inválido |
+| `MissingRequiredField { field }` | Campo obrigatório ausente (ex.: itens, pagamentos) |
+| `UnsupportedIcmsCst(cst)` | CST ICMS não reconhecido |
+| `UnsupportedIcmsCsosn(csosn)` | CSOSN não reconhecido |
+| `XmlGeneration(msg)` | Falha na serialização do XML |
+
+```rust
+match builder.build() {
+    Ok(built) => { /* prosseguir com assinatura */ }
+    Err(FiscalError::InvalidTaxData(msg)) => {
+        eprintln!("Dado fiscal inválido: {msg}");
+    }
+    Err(FiscalError::MissingRequiredField { field }) => {
+        eprintln!("Campo obrigatório ausente: {field}");
+    }
+    Err(e) => {
+        eprintln!("Erro na construção: {e}");
+    }
+}
+```
+
+## Etapa 3 — Assinar o XML
+
+A assinatura digital usa **RSA-SHA1** com envelope XMLDSig, conforme exigido pelo SEFAZ. O crate `fiscal-crypto` é responsável pela operação criptográfica; o `fiscal-core` permanece independente de implementação graças ao closure `sign_with`.
+
+### Carregar o certificado A1
+
+```rust
+use fiscal::certificate::{load_certificate, sign_xml};
+
+let pfx_bytes = std::fs::read("certificado.pfx")
+    .expect("Arquivo PFX não encontrado");
+
+let cert = load_certificate(&pfx_bytes, "senha_do_certificado")?;
+// cert.private_key  — chave privada em PEM
+// cert.certificate  — certificado X.509 em PEM
+```
+
+### Assinar e obter o XML final
+
+```rust
+let signed = built.sign_with(|xml| {
+    sign_xml(xml, &cert.private_key, &cert.certificate)
+})?;
+
+let xml_assinado = signed.signed_xml();   // XML com <Signature>
+let chave_acesso = signed.access_key();   // 44 dígitos
+let xml_original = signed.unsigned_xml(); // XML sem assinatura
+```
+
+### Tratamento de erros na assinatura
+
+O closure dentro de `sign_with` retorna `Result<String, FiscalError>`. Erros possíveis:
+
+| Variante do `FiscalError` | Causa |
+|---|---|
+| `Certificate("Failed to parse private key: ...")` | PEM da chave privada inválido ou corrompido |
+| `Certificate("Invalid PFX data: ...")` | Arquivo PFX inválido |
+| `Certificate("Failed to parse PFX (wrong password?): ...")` | Senha incorreta |
+| `Certificate("<infNFe> element not found...")` | XML não contém o elemento esperado |
+| `Certificate("RSA-SHA1 signing failed: ...")` | Falha na operação criptográfica |
+
+## Etapa 4 — Transmitir ao SEFAZ
+
+O `SefazClient` gerencia a conexão mTLS com os webservices SEFAZ. A identidade do certificado é configurada na construção do client.
+
+### Criar o client
+
+```rust
+use fiscal_sefaz::client::SefazClient;
+
+let client = SefazClient::new(&pfx_bytes, "senha_do_certificado")?;
+```
+
+### Verificar status do SEFAZ (opcional, recomendado)
+
+```rust
+let status = client.status("SP", SefazEnvironment::Homologation).await?;
+if status.status_code == "107" {
+    println!("SEFAZ em operação: {}", status.status_message);
+}
+```
+
+### Enviar para autorização
+
+```rust
+let response = client.authorize(
+    "SP",
+    SefazEnvironment::Homologation,
+    signed.signed_xml(),
+    "lot_001",  // identificador do lote
+).await?;
+
+match response.status_code.as_str() {
+    "100" | "150" => {
+        println!("Autorizada! Protocolo: {}", response.protocol);
+    }
+    "110" | "301" | "302" | "303" => {
+        println!("Denegada: [{}] {}", response.status_code, response.status_message);
+    }
+    _ => {
+        println!("Rejeitada: [{}] {}", response.status_code, response.status_message);
+    }
+}
+```
+
+### Tratamento de erros na transmissão
+
+| Variante do `FiscalError` | Causa |
+|---|---|
+| `Network("connection refused...")` | SEFAZ fora do ar ou rede indisponível |
+| `Network("timeout...")` | Timeout de 90s excedido |
+| `Certificate("Failed to load PFX identity: ...")` | Certificado inválido para mTLS |
+| `InvalidStateCode(uf)` | UF não encontrada na tabela de URLs |
+| `XmlParsing(msg)` | Resposta SOAP malformada |
+
+### Contingência
+
+Quando o SEFAZ está indisponível (especialmente para NFC-e), salve o XML assinado localmente com status `contingency` e reenvie posteriormente:
+
+```rust
+// Tentativa de envio com fallback
+let resultado = match client.authorize("SP", env, signed_xml, lot_id).await {
+    Ok(resp) => resp,
+    Err(FiscalError::Network(_)) => {
+        // Salvar localmente para sincronização posterior
+        salvar_contingencia(signed_xml, &chave_acesso).await?;
+        return Ok(StatusContingencia);
+    }
+    Err(e) => return Err(e),
+};
+```
+
+## Etapa 5 — Armazenar (attach_protocol)
+
+Após a autorização, junte o XML da requisição com o protocolo da resposta para formar o `<nfeProc>` -- o documento fiscal definitivo.
+
+```rust
+use fiscal::complement::attach_protocol;
+
+let nfe_proc = attach_protocol(
+    signed.signed_xml(),  // XML assinado enviado
+    &response.raw_xml,    // XML da resposta SEFAZ
+)?;
+
+// nfe_proc contém:
+// <?xml version="1.0" encoding="UTF-8"?>
+// <nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe">
+//   <NFe>...</NFe>
+//   <protNFe>...</protNFe>
+// </nfeProc>
+
+salvar_no_banco(&nfe_proc, &chave_acesso).await?;
+```
+
+### Tratamento de erros no armazenamento
+
+| Variante do `FiscalError` | Causa |
+|---|---|
+| `XmlParsing("Could not find <NFe> tag...")` | XML de requisição sem `<NFe>` |
+| `XmlParsing("Could not find <protNFe>...")` | Resposta sem protocolo |
+| `SefazRejection { code, message }` | Status do protocolo indica rejeição |
+
+## Exemplo completo: NF-e ponta a ponta
+
+```rust
+use fiscal::types::*;
+use fiscal::newtypes::{Cents, IbgeCode, Rate};
+use fiscal::xml_builder::InvoiceBuilder;
+use fiscal::certificate::{load_certificate, sign_xml};
+use fiscal::complement::attach_protocol;
+use fiscal_sefaz::client::SefazClient;
+
+async fn emitir_nfe() -> Result<String, fiscal::FiscalError> {
+    // 1. Configurar
+    let issuer = IssuerData::new(
+        "25028332000105", "140950881119", "Minha Empresa LTDA",
+        TaxRegime::SimplesNacional, "SP",
+        IbgeCode("3550308".to_string()), "Sao Paulo",
+        "Av Paulista", "1000", "Bela Vista", "01310100",
+    );
+
+    let recipient = RecipientData::new("17812455000295", "Cliente LTDA")
+        .state_tax_id("142304338112")
+        .street("Rua do Cliente").street_number("200")
+        .district("Centro")
+        .city_code(IbgeCode::new("3550308")).city_name("SAO PAULO")
+        .state_code("SP").zip_code("05302001");
+
+    let item = InvoiceItemData::new(
+        1, "001", "Produto A", "84715010", "5102", "UN",
+        2.0, Cents(5000), Cents(10000),
+        "102", Rate(0), Cents(0), "99", "99",
+    );
+
+    let payment = PaymentData::new("01", Cents(10000));
+
+    // 2. Construir
+    let built = InvoiceBuilder::new(issuer, SefazEnvironment::Homologation, InvoiceModel::Nfe)
+        .series(1)
+        .invoice_number(502)
+        .operation_nature("VENDA")
+        .recipient(recipient)
+        .add_item(item)
+        .payments(vec![payment])
+        .build()?;
+
+    // 3. Assinar
+    let pfx = std::fs::read("certificado.pfx").expect("PFX não encontrado");
+    let cert = load_certificate(&pfx, "senha")?;
+
+    let signed = built.sign_with(|xml| {
+        sign_xml(xml, &cert.private_key, &cert.certificate)
+    })?;
+
+    // 4. Transmitir
+    let client = SefazClient::new(&pfx, "senha")?;
+    let response = client
+        .authorize("SP", SefazEnvironment::Homologation, signed.signed_xml(), "1")
+        .await?;
+
+    // 5. Armazenar
+    let nfe_proc = attach_protocol(signed.signed_xml(), &response.raw_xml)?;
+
+    println!("NF-e autorizada! Chave: {}", signed.access_key());
+    Ok(nfe_proc)
+}
+```
+
+## Exemplo completo: NFC-e ponta a ponta
+
+```rust
+async fn emitir_nfce() -> Result<String, fiscal::FiscalError> {
+    // 1. Configurar — emissor igual, sem destinatário (venda < R$200)
+    let issuer = IssuerData::new(
+        "25028332000105", "140950881119", "Minha Loja",
+        TaxRegime::SimplesNacional, "SP",
+        IbgeCode("3550308".to_string()), "Sao Paulo",
+        "Av Paulista", "1000", "Bela Vista", "01310100",
+    )
+    .trade_name("Minha Loja");
+
+    let item = InvoiceItemData::new(
+        1, "002", "Cafe Expresso", "09012110", "5102", "UN",
+        1.0, Cents(800), Cents(800),
+        "102", Rate(0), Cents(0), "99", "99",
+    );
+
+    // 2. Construir — modelo NFC-e, sem destinatário
+    let built = InvoiceBuilder::new(issuer, SefazEnvironment::Homologation, InvoiceModel::Nfce)
+        .series(1)
+        .invoice_number(47)
+        .add_item(item)
+        .payments(vec![PaymentData::new("01", Cents(800))])
+        .build()?;
+
+    // 3. Assinar
+    let pfx = std::fs::read("certificado.pfx").expect("PFX não encontrado");
+    let cert = load_certificate(&pfx, "senha")?;
+    let signed = built.sign_with(|xml| {
+        sign_xml(xml, &cert.private_key, &cert.certificate)
+    })?;
+
+    // 4. Transmitir (com fallback para contingência)
+    let client = SefazClient::new(&pfx, "senha")?;
+    let response = match client
+        .authorize("SP", SefazEnvironment::Homologation, signed.signed_xml(), "1")
+        .await
+    {
+        Ok(resp) => resp,
+        Err(FiscalError::Network(msg)) => {
+            eprintln!("SEFAZ indisponível: {msg}. Salvando em contingência.");
+            // Armazenar XML assinado para reenvio posterior
+            return Ok(signed.signed_xml().to_string());
+        }
+        Err(e) => return Err(e),
+    };
+
+    // 5. Armazenar
+    let nfe_proc = attach_protocol(signed.signed_xml(), &response.raw_xml)?;
+    Ok(nfe_proc)
+}
+```
+
+## Ciclo de vida dos status
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : build + sign + transmit
+    Pending --> Authorized : cStat 100/150
+    Pending --> Denied : cStat 110/301/302/303
+    Pending --> Rejected : outro cStat
+    Pending --> Contingency : falha de rede
+
+    Authorized --> Cancelled : evento cancelamento
+    Contingency --> Authorized : sincronização ok
+    Contingency --> Rejected : sincronização rejeitada
+
+    Rejected --> [*] : corrigir e reemitir
+    Denied --> [*] : resolução fiscal
+    Cancelled --> [*]
+```
+
+## Referência de códigos SEFAZ
+
+| Código (`cStat`) | Significado | Ação |
+|---|---|---|
+| `100` | Autorizado o uso da NF-e | Anexar protocolo e armazenar |
+| `150` | Autorizado fora do prazo | Idem |
+| `110` | Uso denegado | Registrar como denegada |
+| `301`-`303` | Denegada (irregularidade fiscal) | Registrar como denegada |
+| `102` | Inutilização homologada | Armazenar comprovante |
+| `107` | Serviço em operação | Status check OK |
+| `135` | Evento registrado e vinculado | Evento processado com sucesso |
+| `136` | Evento registrado (não vinculado) | Evento processado |
+| `204` | Duplicidade de NF-e | NF-e já existe com esta chave |

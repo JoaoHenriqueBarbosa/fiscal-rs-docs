@@ -1,0 +1,349 @@
+---
+title: Motor de Calculo Fiscal
+description: O motor de impostos calcula ICMS, PIS, COFINS, IPI e II para cada item da NF-e, produzindo objetos TaxElement intermediarios que sao serializados em XML. A logica de dominio nunca manipula XML diretamente.
+---
+
+## Visao Geral
+
+O motor de calculo fiscal do `fiscal-rs` segue um padrao de desacoplamento onde a logica de dominio (calculo de impostos) nunca manipula XML diretamente. Cada modulo de imposto produz um `TaxElement` intermediario, que e entao serializado em XML pela camada de construcao.
+
+**Arquivos-fonte**: `tax_element.rs`, `tax_icms.rs`, `tax_pis_cofins_ipi.rs`, `traits.rs`, `format_utils.rs`
+
+```mermaid
+flowchart LR
+    subgraph Dominio["Modulos de Dominio"]
+        ICMS["tax_icms.rs"]
+        PIS["tax_pis_cofins_ipi.rs"]
+    end
+
+    subgraph IR["Representacao Intermediaria"]
+        TE["TaxElement"]
+    end
+
+    subgraph Saida["Serializacao"]
+        SER["serialize_tax_element()"]
+        XML["String XML"]
+    end
+
+    ICMS --> TE
+    PIS --> TE
+    TE --> SER
+    SER --> XML
+```
+
+## O Padrao TaxElement
+
+O `TaxElement` e a representacao intermediaria que conecta os modulos de calculo a camada de XML. Essa estrutura captura a hierarquia aninhada que a SEFAZ exige (tag externa envolvendo uma tag variante com campos internos).
+
+### Estrutura (`tax_element.rs`)
+
+```rust
+pub struct TaxField {
+    pub name: String,   // nome da tag XML, ex: "vBC"
+    pub value: String,  // valor formatado, ex: "10.50"
+}
+
+pub struct TaxElement {
+    pub outer_tag: Option<String>,  // tag envolvente, ex: "ICMS", "PIS"
+    pub outer_fields: Vec<TaxField>, // campos no nivel externo (ex: cEnq do IPI)
+    pub variant_tag: String,        // tag da variante, ex: "ICMS00", "PISAliq"
+    pub fields: Vec<TaxField>,      // campos dentro da variante
+}
+```
+
+**Exemplo de serializacao:**
+
+```xml
+<ICMS>
+  <ICMS00>
+    <orig>0</orig>
+    <CST>00</CST>
+    <modBC>3</modBC>
+    <vBC>100.00</vBC>
+    <pICMS>12.00</pICMS>
+    <vICMS>12.00</vICMS>
+  </ICMS00>
+</ICMS>
+```
+
+### Helpers de Campos
+
+A crate fornece tres helpers para construir listas de `TaxField`:
+
+| Helper | Comportamento |
+|--------|---------------|
+| `required_field(name, value)` | Retorna `Err(FiscalError::MissingRequiredField)` se `value` for `None` |
+| `optional_field(name, value)` | Retorna `None` se o valor for `None` (sera filtrado) |
+| `filter_fields(fields)` | Remove entradas `None` de um `Vec<Option<TaxField>>` |
+
+## ICMS (`tax_icms.rs`)
+
+O ICMS e o imposto mais complexo, com 15 variantes CST para o regime Normal e 10 variantes CSOSN para o Simples Nacional. O `fiscal-rs` modela cada variante como um enum Rust tipado, eliminando erros de runtime.
+
+### Enum IcmsVariant
+
+```rust
+pub enum IcmsVariant {
+    Cst(Box<IcmsCst>),    // Regime Normal (Lucro Real/Presumido)
+    Csosn(Box<IcmsCsosn>), // Simples Nacional (CRT 1/2)
+}
+```
+
+### Ponto de Entrada
+
+```rust
+pub fn build_icms_xml(
+    variant: &IcmsVariant,
+    totals: &mut IcmsTotals,
+) -> Result<String, FiscalError>
+```
+
+Roteia internamente por regime tributario:
+- **Regime Normal** (CRT 3) — variantes CST via `build_icms_cst_xml`
+- **Simples Nacional** (CRT 1/2) — variantes CSOSN via `build_icms_csosn_xml`
+
+### Mapeamento CST (Regime Normal)
+
+Cada variante CST carrega **somente** os campos validos para aquele codigo, garantindo seguranca em tempo de compilacao:
+
+| CST | Descricao | Campos Principais |
+|-----|-----------|-------------------|
+| 00 | Tributada integralmente | orig, modBC, vBC, pICMS, vICMS, pFCP?, vFCP? |
+| 02 | Monofasica combustiveis | orig, qBCMono?, adRemICMS, vICMSMono |
+| 10 | Tributada + ST | campos base + ST (modBCST, vBCST, pICMSST, vICMSST) + FCP-ST? |
+| 15 | Monofasica + retencao | orig, qBCMono?, adRemICMS, vICMSMono + retencao |
+| 20 | Reducao de base | campos base + pRedBC + desoneracoes? |
+| 30 | Isenta + ST | ST (modBCST, vBCST, pICMSST, vICMSST) + desoneracoes? |
+| 40 | Isenta | orig + desoneracoes? |
+| 41 | Nao tributada | orig + desoneracoes? |
+| 50 | Suspensao | orig + desoneracoes? |
+| 51 | Diferimento | campos base opcionais + pDif, vICMSDif, vICMSOp + FCP? |
+| 53 | Monofasica diferida | qBCMono?, adRemICMS?, pDif?, vICMSMonoDif?, vICMSMono? |
+| 60 | Cobrado anteriormente por ST | orig + campos retidos/efetivos opcionais |
+| 61 | Monofasica cobrada anteriormente | qBCMonoRet?, adRemICMSRet, vICMSMonoRet |
+| 70 | Reducao de base + ST | campos base + pRedBC + ST + FCP + FCP-ST + desoneracoes? |
+| 90 | Outros | todos os campos opcionais (base, ST, FCP, desoneracoes) |
+
+### Mapeamento CSOSN (Simples Nacional)
+
+| CSOSN | Descricao | Campos Principais |
+|-------|-----------|-------------------|
+| 101 | Tributada com credito | orig, CSOSN, pCredSN, vCredICMSSN |
+| 102/103/300/400 | Sem credito / Isenta / Imune | orig, CSOSN |
+| 201 | Tributada com credito + ST | orig, ST completa + pCredSN?, vCredICMSSN? |
+| 202/203 | Sem credito + ST | orig, ST completa |
+| 500 | Cobrado anteriormente por ST | orig, campos retidos/efetivos opcionais |
+| 900 | Outros | todos os campos opcionais |
+
+### Acumulacao de Totais
+
+Cada chamada a `build_icms_xml` acumula valores no `IcmsTotals`, que contem todos os campos para `<ICMSTot>`:
+
+```rust
+pub struct IcmsTotals {
+    pub v_bc: Cents,           // base de calculo total
+    pub v_icms: Cents,         // ICMS total
+    pub v_icms_deson: Cents,   // ICMS desonerado total
+    pub v_bc_st: Cents,        // base ST total
+    pub v_st: Cents,           // valor ST total
+    pub v_fcp: Cents,          // FCP total
+    pub v_fcp_st: Cents,       // FCP-ST total
+    pub v_fcp_st_ret: Cents,   // FCP-ST retido total
+    // ... campos DIFAL e monofasicos
+}
+```
+
+Use `create_icms_totals()` para inicializar e `merge_icms_totals()` para mesclar totais entre itens.
+
+### Grupos Auxiliares
+
+Alem das variantes CST/CSOSN, tres structs tratam cenarios especiais:
+
+| Struct | Tag XML | Uso |
+|--------|---------|-----|
+| `IcmsPartData` | `<ICMSPart>` | Particao interestadual do ICMS |
+| `IcmsStData` | `<ICMSST>` | Repasse de ST entre estados (CST 41/60) |
+| `IcmsUfDestData` | `<ICMSUFDest>` | DIFAL para consumidor final interestadual (EC 87/2015) |
+
+## PIS / COFINS / IPI / II (`tax_pis_cofins_ipi.rs`)
+
+### Padrao ContributionTax (DRY)
+
+PIS e COFINS sao estruturalmente identicos -- apenas os nomes dos campos XML diferem. Um `ContributionTaxConfig` generico parametriza a logica compartilhada:
+
+```rust
+struct ContributionTaxConfig {
+    tax_name: &'static str,    // "PIS" | "COFINS"
+    rate_field: &'static str,  // "pPIS" | "pCOFINS"
+    value_field: &'static str, // "vPIS" | "vCOFINS"
+    st_tag: &'static str,      // "PISST" | "COFINSST"
+    st_indicator: &'static str, // "indSomaPISST" | "indSomaCOFINSST"
+}
+```
+
+As funcoes publicas sao adaptadores finos que delegam para o motor generico:
+
+```rust
+pub fn build_pis_xml(data: &PisData) -> String;
+pub fn build_cofins_xml(data: &CofinsData) -> String;
+pub fn build_pis_st_xml(data: &PisStData) -> String;
+pub fn build_cofins_st_xml(data: &CofinsStData) -> String;
+```
+
+### Roteamento por CST (PIS/COFINS)
+
+```mermaid
+flowchart TD
+    CST["CST do Item"]
+    CST -->|01, 02| ALIQ["Aliq: vBC + pPIS/pCOFINS + vPIS/vCOFINS"]
+    CST -->|03| QTDE["Qtde: qBCProd + vAliqProd + vPIS/vCOFINS"]
+    CST -->|04-09| NT["NT: apenas CST"]
+    CST -->|49-99| OUTR["Outr: campos condicionais"]
+
+    ALIQ --> XML1["<PISAliq> / <COFINSAliq>"]
+    QTDE --> XML2["<PISQtde> / <COFINSQtde>"]
+    NT --> XML3["<PISNT> / <COFINSNT>"]
+    OUTR --> XML4["<PISOutr> / <COFINSOutr>"]
+```
+
+| Grupo CST | Tag Variante | Campos |
+|-----------|-------------|--------|
+| 01, 02 | `Aliq` | CST, vBC, pPIS/pCOFINS, vPIS/vCOFINS |
+| 03 | `Qtde` | CST, qBCProd, vAliqProd, vPIS/vCOFINS |
+| 04-09 | `NT` | CST (apenas) |
+| 49-99 | `Outr` | CST + campos condicionais (percentual ou quantidade) |
+
+### IPI
+
+O IPI usa o struct `IpiData` com dois modos de calculo:
+
+```rust
+pub fn build_ipi_xml(data: &IpiData) -> String;
+```
+
+| Grupo CST | Tag Variante | Modo |
+|-----------|-------------|------|
+| 00, 49, 50, 99 | `<IPITrib>` | Percentual (vBC x pIPI) ou quantidade (qUnid x vUnid) |
+| Demais | `<IPINT>` | Nao tributado (apenas CST) |
+
+O `IPI` possui campos externos (`outer_fields`) no nivel da tag `<IPI>` antes da variante: `CNPJProd`, `cSelo`, `qSelo` e `cEnq` (codigo de enquadramento legal).
+
+### II (Imposto de Importacao)
+
+O imposto de importacao e o mais simples, com 4 campos obrigatorios:
+
+```rust
+pub fn build_ii_xml(data: &IiData) -> String;
+// Gera: <II><vBC>...<vDespAdu>...<vII>...<vIOF>...</II>
+```
+
+## Traits Selados (`traits.rs`)
+
+O `fiscal-rs` expoe dois traits selados que unificam a interface de calculo e serializacao. O padrao **sealed trait** garante que apenas tipos internos da crate podem implementa-los -- crates externas podem chamar os metodos mas nao adicionar novas implementacoes.
+
+### TaxCalculation
+
+```rust
+pub trait TaxCalculation: Sealed {
+    fn build_xml(&self) -> String;
+}
+```
+
+Implementado por todos os tipos de dados fiscais:
+
+| Tipo | Delegacao |
+|------|-----------|
+| `IcmsVariant` | `build_icms_xml()` |
+| `PisData` | `build_pis_xml()` |
+| `CofinsData` | `build_cofins_xml()` |
+| `IpiData` | `build_ipi_xml()` |
+| `IiData` | `build_ii_xml()` |
+| `IssqnData` | `build_issqn_xml()` |
+| `IsData` | `build_is_xml()` |
+
+### XmlSerializable
+
+```rust
+pub trait XmlSerializable: Sealed {
+    fn to_xml(&self) -> String;
+}
+```
+
+Implementado por `TaxElement`, delegando para `serialize_tax_element()`. Permite trabalhar com `TaxElement` de forma polimorca atraves do trait.
+
+### Exemplo de Uso
+
+```rust
+use fiscal_core::traits::TaxCalculation;
+use fiscal_core::tax_pis_cofins_ipi::PisData;
+use fiscal_core::newtypes::{Cents, Rate4};
+
+let pis = PisData::new("01")
+    .v_bc(Cents(10000))
+    .p_pis(Rate4(16500))
+    .v_pis(Cents(165));
+
+// Usando o trait diretamente
+let xml = pis.build_xml();
+// Resultado: <PIS><PISAliq><CST>01</CST><vBC>100.00</vBC><pPIS>1.6500</pPIS><vPIS>1.65</vPIS></PISAliq></PIS>
+```
+
+## Fluxo Completo de Calculo
+
+O diagrama a seguir mostra como o `xml_builder` orquestra o calculo de impostos para cada item da NF-e:
+
+```mermaid
+flowchart TD
+    ITEM["InvoiceItemData"]
+
+    subgraph Calculo["Calculo de Impostos por Item"]
+        ICMS_CALC["build_icms_xml()"]
+        PIS_CALC["build_pis_xml()"]
+        COF_CALC["build_cofins_xml()"]
+        IPI_CALC["build_ipi_xml()"]
+        II_CALC["build_ii_xml()"]
+    end
+
+    subgraph Acumulacao["Acumulacao"]
+        TOT["IcmsTotals"]
+        MERGE["merge_icms_totals()"]
+    end
+
+    subgraph Montagem["Montagem XML"]
+        DET["&lt;det nItem=N&gt;"]
+        PROD["&lt;prod&gt;"]
+        IMP["&lt;imposto&gt;"]
+        TOTAL["&lt;total&gt; / &lt;ICMSTot&gt;"]
+    end
+
+    ITEM --> ICMS_CALC
+    ITEM --> PIS_CALC
+    ITEM --> COF_CALC
+    ITEM --> IPI_CALC
+    ITEM --> II_CALC
+
+    ICMS_CALC --> IMP
+    PIS_CALC --> IMP
+    COF_CALC --> IMP
+    IPI_CALC --> IMP
+    II_CALC --> IMP
+
+    ICMS_CALC --> TOT
+    TOT --> MERGE
+    MERGE --> TOTAL
+
+    PROD --> DET
+    IMP --> DET
+```
+
+## Utilitarios de Formatacao
+
+Todos os valores monetarios sao representados internamente como inteiros (`Cents` e `Rate4`) para evitar erros de ponto flutuante. A formatacao acontece somente na camada de serializacao:
+
+| Funcao | Entrada | Saida | Uso |
+|--------|---------|-------|-----|
+| `format_cents(1050, 2)` | centavos | `"10.50"` | Valores monetarios |
+| `format_cents(1050, 4)` | centavos | `"10.5000"` | Aliquotas 4 casas |
+| `format_rate4_or_zero(16500)` | inteiro x10000 | `"1.6500"` | Aliquotas PIS/COFINS |
+| `format_cents_or_zero(None, 2)` | nullable | `"0.00"` | Campos obrigatorios |
+| `format_cents_or_none(None, 2)` | nullable | `None` | Campos opcionais |

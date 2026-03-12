@@ -1,0 +1,288 @@
+---
+title: Pipeline de CI/CD
+description: Integração contínua, auditoria de segurança e publicação automatizada
+---
+
+## Visão Geral
+
+O fiscal-rs utiliza três workflows GitHub Actions que, juntos, garantem qualidade de código, segurança de dependências e publicação automatizada no crates.io.
+
+| Workflow | Arquivo | Gatilho |
+|----------|---------|---------|
+| CI | `ci.yml` | Push e PR para `master` |
+| Security Audit | `audit.yml` | Push para `master`, diário (06:00 UTC), manual |
+| Release-plz | `release-plz.yml` | Push para `master` |
+
+## Pipeline de CI
+
+O workflow principal (`ci.yml`) executa cinco jobs em paralelo. Todos devem passar para que um PR seja mesclado.
+
+```mermaid
+flowchart LR
+  push["Push / PR"]
+
+  push --> fmt["Rustfmt"]
+  push --> clippy["Clippy"]
+  push --> test["Nextest"]
+  push --> doctest["Doc Tests"]
+  push --> docs["Cargo Doc"]
+
+  fmt -->|"cargo fmt --all --check"| ok1["OK"]
+  clippy -->|"cargo clippy -D warnings"| ok2["OK"]
+  test -->|"cargo nextest run --all-features"| ok3["OK"]
+  doctest -->|"cargo test --doc --all-features"| ok4["OK"]
+  docs -->|"RUSTDOCFLAGS='-D warnings' cargo doc"| ok5["OK"]
+
+  style push fill:#1e293b,color:#e2e8f0
+  style ok1 fill:#166534,color:#bbf7d0
+  style ok2 fill:#166534,color:#bbf7d0
+  style ok3 fill:#166534,color:#bbf7d0
+  style ok4 fill:#166534,color:#bbf7d0
+  style ok5 fill:#166534,color:#bbf7d0
+```
+
+### Detalhamento dos Jobs
+
+#### 1. Rustfmt
+
+Verifica se todo o código segue a formatação padrão do Rust.
+
+```bash
+cargo fmt --all --check
+```
+
+Não corrige automaticamente -- apenas rejeita código mal formatado. Use `cargo fmt` localmente antes de enviar.
+
+#### 2. Clippy
+
+Análise estática com todos os lints tratados como erros.
+
+```bash
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+O flag `--all-targets` inclui benchmarks, exemplos e testes. O `-D warnings` garante tolerância zero a avisos.
+
+#### 3. Nextest (Testes)
+
+Executa a suíte completa de testes usando [cargo-nextest](https://nexte.st/), que oferece execução paralela e saída mais clara que o `cargo test` padrão.
+
+```bash
+cargo nextest run --all-features
+```
+
+Cobre 692+ testes de integração incluindo testes portados de PHP e TypeScript, testes de propriedade (proptest) e testes de snapshot (insta).
+
+#### 4. Doc Tests
+
+Executa os exemplos de código embutidos na documentação (rustdoc), garantindo que todos compilam e produzem os resultados esperados.
+
+```bash
+cargo test --doc --all-features
+```
+
+#### 5. Cargo Doc
+
+Compila a documentação completa com warnings tratados como erros.
+
+```bash
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+Garante que não existem links quebrados, itens sem documentação (quando exigido) ou referências inválidas.
+
+### Cache
+
+Todos os jobs utilizam `actions/cache@v5` para cachear o registry do Cargo e o diretório `target/`. As chaves de cache são segmentadas por job (`cargo-clippy-`, `cargo-test-`, `cargo-docs-`, etc.) com fallback para `$runner.os-cargo-`.
+
+### Dependência de Sistema
+
+Todos os jobs instalam `libssl-dev` e `pkg-config` via apt, necessários para a compilação do crate `openssl-sys` (utilizado para assinatura digital de XML).
+
+---
+
+## Auditoria de Segurança
+
+O workflow `audit.yml` executa duas verificações de segurança complementares.
+
+### cargo-deny
+
+Utiliza a [cargo-deny-action](https://github.com/EmbarkStudios/cargo-deny-action) para verificar quatro categorias em uma única execução:
+
+```bash
+cargo deny check licenses bans advisories sources
+```
+
+| Categoria | O que verifica |
+|-----------|----------------|
+| **licenses** | Licenças permitidas (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, OpenSSL, entre outras) |
+| **bans** | Proibição de dependências com versão wildcard (`*`); aviso para múltiplas versões da mesma crate |
+| **advisories** | Consulta ao [RustSec Advisory DB](https://github.com/rustsec/advisory-db) para vulnerabilidades conhecidas |
+| **sources** | Permite apenas crates.io e membros locais do workspace |
+
+A configuração completa está em `deny.toml` na raiz do workspace.
+
+### cargo-audit
+
+Verificação redundante usando a [audit-check action](https://github.com/rustsec/audit-check), que cria issues automaticamente no repositório quando encontra advisories.
+
+### Gatilhos
+
+- **Push para master**: apenas quando `Cargo.toml`, `Cargo.lock` ou `deny.toml` são alterados
+- **Agendamento diário**: roda às 06:00 UTC para capturar advisories publicados durante a noite
+- **Manual**: via `workflow_dispatch` para verificação sob demanda
+
+---
+
+## Release-plz (Publicação Automatizada)
+
+O workflow `release-plz.yml` automatiza o versionamento semântico e a publicação no crates.io usando [release-plz](https://release-plz.dev/).
+
+```mermaid
+sequenceDiagram
+  participant Dev as Desenvolvedor
+  participant GH as GitHub (master)
+  participant PR as Release PR
+  participant Crates as crates.io
+
+  Dev->>GH: git push (merge PR)
+  GH->>GH: release-plz-pr job
+  Note over GH: Analisa commits<br/>desde último release
+  GH->>PR: Cria/atualiza Release PR<br/>(bump versão + CHANGELOG)
+
+  Dev->>PR: Review e merge do Release PR
+  PR->>GH: Push para master
+
+  GH->>GH: release-plz-release job
+  Note over GH: Detecta versão nova<br/>no Cargo.toml
+  GH->>Crates: cargo publish
+  GH->>GH: Cria Git tag + GitHub Release
+```
+
+### Jobs
+
+O workflow contém dois jobs que rodam em todo push para `master`:
+
+#### release-plz-pr
+
+Analisa os commits desde a última release, calcula a próxima versão semântica baseada nos [Conventional Commits](https://www.conventionalcommits.org/), e cria (ou atualiza) um Pull Request com:
+
+- Bump de versão no `Cargo.toml`
+- Atualização do `CHANGELOG.md`
+
+```yaml
+command: release-pr
+```
+
+#### release-plz-release
+
+Detecta se a versão no `Cargo.toml` da branch `master` é mais nova que a última publicada no crates.io. Se for, executa `cargo publish` e cria uma tag Git + GitHub Release.
+
+```yaml
+command: release
+```
+
+### Segurança
+
+- Condição: `github.repository_owner == 'JoaoHenriqueBarbosa'` -- só executa no repositório original
+- Concurrency group: `release-plz-${{ github.ref }}` -- evita execuções paralelas do job de PR
+- Secrets: `CARGO_REGISTRY_TOKEN` para publicação e `GITHUB_TOKEN` para criação de PRs/releases
+
+---
+
+## Hook de Pre-push
+
+O repositório inclui um hook `pre-push` em `scripts/hooks/pre-push` que espelha a pipeline de CI localmente, bloqueando o push se qualquer verificação falhar.
+
+### Etapas do Hook
+
+```mermaid
+flowchart TD
+  start["git push"] --> fmt["1. cargo fmt --all --check"]
+  fmt -->|OK| clippy["2. cargo clippy --all-targets --all-features -D warnings"]
+  clippy -->|OK| test["3. cargo nextest run --all-features"]
+  test -->|OK| doctest["4. cargo test --doc --all-features"]
+  doctest -->|OK| doc["5. cargo doc --no-deps --all-features"]
+  doc -->|OK| deny{"6. cargo-deny instalado?"}
+  deny -->|Sim| denyrun["cargo deny check"]
+  deny -->|Não| skip["Pula verificação de licenças"]
+  denyrun -->|OK| success["Push permitido"]
+  skip --> success
+
+  fmt -->|FALHOU| block["Push bloqueado"]
+  clippy -->|FALHOU| block
+  test -->|FALHOU| block
+  doctest -->|FALHOU| block
+  doc -->|FALHOU| block
+  denyrun -->|FALHOU| block
+
+  style success fill:#166534,color:#bbf7d0
+  style block fill:#991b1b,color:#fecaca
+  style start fill:#1e293b,color:#e2e8f0
+```
+
+### Instalação
+
+```bash
+# A partir da raiz do repositório
+cp scripts/hooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+### Diferenças em relação ao CI
+
+| Verificação | CI | Pre-push |
+|-------------|-----|----------|
+| cargo fmt | Sempre | Sempre |
+| cargo clippy | Sempre | Sempre |
+| nextest | Sempre | nextest se disponível, senão `cargo test` |
+| doc tests | Sempre | Sempre |
+| cargo doc | Sempre | Sempre |
+| cargo-deny | Workflow separado (audit.yml) | Somente se `cargo-deny` estiver instalado |
+| cargo-audit | Workflow separado (audit.yml) | Não executado |
+
+<Callout type="info">
+O hook usa `set -euo pipefail` para abortar na primeira falha e inclui saída colorida para facilitar a leitura do resultado.
+</Callout>
+
+---
+
+## Resumo da Pipeline Completa
+
+```mermaid
+flowchart TB
+  subgraph Local["Desenvolvimento Local"]
+    dev["git push"] --> hook["Pre-push Hook"]
+    hook --> fmt1["fmt + clippy + test + doctest + doc"]
+  end
+
+  subgraph CI_GH["GitHub Actions - CI"]
+    direction LR
+    fmt2["Rustfmt"]
+    clip2["Clippy"]
+    test2["Nextest"]
+    dtst2["Doc Tests"]
+    docs2["Cargo Doc"]
+  end
+
+  subgraph Audit["GitHub Actions - Auditoria"]
+    deny2["cargo-deny"]
+    audit2["cargo-audit"]
+  end
+
+  subgraph Release["GitHub Actions - Release"]
+    rpr["release-plz PR"]
+    rrel["release-plz release"]
+    rpr --> rrel
+    rrel --> crates["crates.io"]
+  end
+
+  fmt1 -->|"push aceito"| CI_GH
+  CI_GH -->|"master merge"| Release
+  CI_GH -.->|"paralelo"| Audit
+
+  style Local fill:#1e293b,color:#e2e8f0
+  style CI_GH fill:#172554,color:#bfdbfe
+  style Audit fill:#3b0764,color:#e9d5ff
+  style Release fill:#14532d,color:#bbf7d0
+```
