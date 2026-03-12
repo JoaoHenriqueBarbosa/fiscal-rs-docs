@@ -17,7 +17,7 @@ O fiscal-rs utiliza três workflows GitHub Actions que, juntos, garantem qualida
 
 O workflow principal (`ci.yml`) executa cinco jobs em paralelo. Todos devem passar para que um PR seja mesclado.
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
   push["Push / PR"]
 
@@ -39,7 +39,7 @@ flowchart LR
   style ok3 fill:#166534,color:#bbf7d0
   style ok4 fill:#166534,color:#bbf7d0
   style ok5 fill:#166534,color:#bbf7d0
-```
+`} />
 
 ### Detalhamento dos Jobs
 
@@ -138,7 +138,7 @@ Verificação redundante usando a [audit-check action](https://github.com/rustse
 
 O workflow `release-plz.yml` automatiza o versionamento semântico e a publicação no crates.io usando [release-plz](https://release-plz.dev/).
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
   participant Dev as Desenvolvedor
   participant GH as GitHub (master)
@@ -157,7 +157,7 @@ sequenceDiagram
   Note over GH: Detecta versão nova<br/>no Cargo.toml
   GH->>Crates: cargo publish
   GH->>GH: Cria Git tag + GitHub Release
-```
+`} />
 
 ### Jobs
 
@@ -196,7 +196,7 @@ O repositório inclui um hook `pre-push` em `scripts/hooks/pre-push` que espelha
 
 ### Etapas do Hook
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
   start["git push"] --> fmt["1. cargo fmt --all --check"]
   fmt -->|OK| clippy["2. cargo clippy --all-targets --all-features -D warnings"]
@@ -219,7 +219,7 @@ flowchart TD
   style success fill:#166534,color:#bbf7d0
   style block fill:#991b1b,color:#fecaca
   style start fill:#1e293b,color:#e2e8f0
-```
+`} />
 
 ### Instalação
 
@@ -249,7 +249,7 @@ O hook usa `set -euo pipefail` para abortar na primeira falha e inclui saída co
 
 ## Resumo da Pipeline Completa
 
-```mermaid
+<Mermaid chart={`
 flowchart TB
   subgraph Local["Desenvolvimento Local"]
     dev["git push"] --> hook["Pre-push Hook"]
@@ -285,4 +285,4 @@ flowchart TB
   style CI_GH fill:#172554,color:#bfdbfe
   style Audit fill:#3b0764,color:#e9d5ff
   style Release fill:#14532d,color:#bbf7d0
-```
+`} />

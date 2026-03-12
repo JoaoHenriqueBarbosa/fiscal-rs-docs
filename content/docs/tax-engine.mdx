@@ -9,7 +9,7 @@ O motor de calculo fiscal do `fiscal-rs` segue um padrao de desacoplamento onde 
 
 **Arquivos-fonte**: `tax_element.rs`, `tax_icms.rs`, `tax_pis_cofins_ipi.rs`, `traits.rs`, `format_utils.rs`
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     subgraph Dominio["Modulos de Dominio"]
         ICMS["tax_icms.rs"]
@@ -29,7 +29,7 @@ flowchart LR
     PIS --> TE
     TE --> SER
     SER --> XML
-```
+`} />
 
 ## O Padrao TaxElement
 
@@ -192,7 +192,7 @@ pub fn build_cofins_st_xml(data: &CofinsStData) -> String;
 
 ### Roteamento por CST (PIS/COFINS)
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     CST["CST do Item"]
     CST -->|01, 02| ALIQ["Aliq: vBC + pPIS/pCOFINS + vPIS/vCOFINS"]
@@ -204,7 +204,7 @@ flowchart TD
     QTDE --> XML2["<PISQtde> / <COFINSQtde>"]
     NT --> XML3["<PISNT> / <COFINSNT>"]
     OUTR --> XML4["<PISOutr> / <COFINSOutr>"]
-```
+`} />
 
 | Grupo CST | Tag Variante | Campos |
 |-----------|-------------|--------|
@@ -292,7 +292,7 @@ let xml = pis.build_xml();
 
 O diagrama a seguir mostra como o `xml_builder` orquestra o calculo de impostos para cada item da NF-e:
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     ITEM["InvoiceItemData"]
 
@@ -334,7 +334,7 @@ flowchart TD
 
     PROD --> DET
     IMP --> DET
-```
+`} />
 
 ## Utilitarios de Formatacao
 

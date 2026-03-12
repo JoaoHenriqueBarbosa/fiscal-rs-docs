@@ -11,7 +11,7 @@ O fiscal-rs segue o princípio **"parse, don't validate"** (analise, não valide
 
 Na prática, isso significa que se você tem um `TaxId`, ele **com certeza** contém 11 ou 14 dígitos. Se você tem um `Ncm`, ele **com certeza** tem 8 dígitos. Não é necessário re-validar em nenhum outro lugar do código.
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     E["Entrada bruta<br/>&str"] -->|"TaxId::new()"| V{Válido?}
     V -->|Sim| T["TaxId<br/>(garantido válido)"]
@@ -23,13 +23,13 @@ flowchart LR
 
     style T fill:#2d6a4f,color:#fff
     style R fill:#d00000,color:#fff
-```
+`} />
 
 ## Hierarquia de tipos
 
 O módulo `newtypes` fornece tipos validados para cada domínio fiscal. Todos seguem o mesmo padrão: um construtor `new()` que retorna `Result<Self, FiscalError>`.
 
-```mermaid
+<Mermaid chart={`
 flowchart TB
     subgraph "Valores monetários"
         Cents["Cents(i64)<br/>R$ em centavos"]
@@ -49,7 +49,7 @@ flowchart TB
         StateCode["StateCode(&'static str)<br/>UF validada (27 estados)"]
         AccessKey["AccessKey(String)<br/>44 dígitos com dígito verificador"]
     end
-```
+`} />
 
 ## Cents: por que inteiros para dinheiro
 
@@ -282,7 +282,7 @@ cUF AAMM     CNPJ      mod ser   nNF  tpE  cNF   DV
 
 Este diagrama mostra como os newtypes se encaixam no fluxo de construção de uma NF-e:
 
-```mermaid
+<Mermaid chart={`
 flowchart TB
     Input["Dados brutos do sistema"] --> V1["TaxId::new(cnpj)?"]
     Input --> V2["Ncm::new(ncm)?"]
@@ -309,7 +309,7 @@ flowchart TB
     style V4 fill:#2d6a4f,color:#fff
     style V5 fill:#2d6a4f,color:#fff
     style AK fill:#1b4332,color:#fff
-```
+`} />
 
 ## Resumo dos newtypes
 

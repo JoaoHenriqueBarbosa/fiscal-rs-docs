@@ -11,7 +11,7 @@ O modulo `convert` do `fiscal-core` converte esse formato em XML de NF-e valido,
 
 **Arquivo fonte**: `fiscal-core/src/convert.rs`
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     A["Arquivo TXT\n(SPED pipe-delimited)"] --> B["txt_to_xml()"]
     B --> C{"Cabecalho\nNOTAFISCAL|n|"}
@@ -29,7 +29,7 @@ flowchart TD
     style J fill:#e8f5e9,stroke:#27ae60
     style ERR fill:#fce4ec,stroke:#e53935
     style ERR2 fill:#fce4ec,stroke:#e53935
-```
+`} />
 
 ## Formato TXT do SPED
 
@@ -156,7 +156,7 @@ match validate_txt(&txt, "local_v12") {
 
 ## Pipeline Interna
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     subgraph "NFeParser"
         direction TB
@@ -187,7 +187,7 @@ flowchart LR
     end
 
     P1 ==> B1
-```
+`} />
 
 O `NFeParser` e uma maquina de estados que acumula dados conforme processa cada linha. Quando encontra a tag `H` (cabecalho de item), finaliza o item anterior e inicia um novo. Ao encontrar `W` (totais), finaliza o ultimo item. No final, `build_xml()` monta o documento XML completo percorrendo cada grupo na ordem exigida pelo schema da NF-e.
 

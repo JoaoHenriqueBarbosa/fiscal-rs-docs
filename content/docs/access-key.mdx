@@ -17,11 +17,11 @@ No `fiscal-rs`, a geracao da chave e feita pelo modulo `xml_builder::access_key`
 
 A chave de acesso e composta por 9 campos concatenados, totalizando 44 digitos:
 
-```mermaid
+<Mermaid chart={`
 block-beta
     columns 9
     A["cUF\n2 dig"] B["AAMM\n4 dig"] C["CNPJ\n14 dig"] D["mod\n2 dig"] E["serie\n3 dig"] F["nNF\n9 dig"] G["tpEmis\n1 dig"] H["cNF\n8 dig"] I["cDV\n1 dig"]
-```
+`} />
 
 | Campo | Tamanho | Descricao | Exemplo |
 |-------|---------|-----------|---------|
@@ -84,7 +84,7 @@ assert!(chave.chars().all(|c| c.is_ascii_digit()));
 
 O fluxo interno:
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     A["AccessKeyParams"] --> B["Formatar cada campo\ncom padding de zeros"]
     B --> C["Concatenar 43 digitos\n(base sem DV)"]
@@ -93,7 +93,7 @@ flowchart TD
     D -->|Sim| F["Calcular mod-11\nda base"]
     F --> G["Anexar digito verificador"]
     G --> H["Retornar chave de 44 digitos"]
-```
+`} />
 
 <Callout type="warn" title="Validacao de tamanho">
 Se a base concatenada nao tiver exatamente 43 digitos, a funcao retorna `Err(FiscalError::XmlGeneration)`. Isso indica que um dos parametros de entrada esta malformado (por exemplo, CNPJ com quantidade incorreta de digitos).
@@ -107,7 +107,7 @@ O digito verificador (`cDV`) e calculado usando o algoritmo **modulo 11** com pe
 
 ### Algoritmo passo a passo
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     A["43 digitos da base"] --> B["Percorrer da direita\npara a esquerda"]
     B --> C["Multiplicar cada digito\npelo peso atual"]
@@ -117,7 +117,7 @@ flowchart TD
     F --> G{"resto < 2?"}
     G -->|Sim| H["cDV = 0"]
     G -->|Nao| I["cDV = 11 - resto"]
-```
+`} />
 
 ### Implementacao
 
@@ -190,7 +190,7 @@ assert_eq!(aamm, "2503"); // ano 25, mes 03
 
 O diagrama abaixo mostra como a chave de acesso se integra no fluxo de emissao de uma NF-e:
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
     participant App as Aplicacao
     participant Builder as InvoiceBuilder
@@ -207,7 +207,7 @@ sequenceDiagram
     XML-->>App: XML assinado
     App->>SEFAZ: enviar XML
     SEFAZ-->>App: protocolo de autorizacao
-```
+`} />
 
 <Callout type="info" title="Campo Id do infNFe">
 A chave de acesso e usada como atributo `Id` do elemento `<infNFe>` no XML, prefixada com `"NFe"`:

@@ -7,7 +7,7 @@ Contribuições são bem-vindas! Este guia cobre tudo o que você precisa para c
 
 ## Visão geral do fluxo
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     fork["Fork no GitHub"] --> clone["git clone"]
     clone --> hooks["./scripts/install-hooks.sh"]
@@ -25,7 +25,7 @@ flowchart TD
     ci -->|Passou| review["Code Review"]
     review --> merge["Merge na main"]
     merge --> release["release-plz\ngera changelog + publica"]
-```
+`} />
 
 ## Setup do ambiente
 
@@ -244,7 +244,7 @@ Commits com `!` após o tipo (ou com footer `BREAKING CHANGE:`) incrementam a ve
 
 O projeto usa [release-plz](https://release-plz.ieni.dev/) para automatizar releases. O fluxo funciona assim:
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     merge["PR mergeado\nna main"] --> bot["release-plz\nanalisa commits"]
     bot --> rpr["Cria Release PR\n(bump versão + CHANGELOG)"]
@@ -252,7 +252,7 @@ flowchart LR
     approve --> publish["cargo publish\n(trusted publishing)"]
     publish --> dist["cargo-dist\ngera binários"]
     dist --> gh["GitHub Release\ncom binários anexados"]
-```
+`} />
 
 1. Quando PRs são mergeados na `main`, o **release-plz** analisa os commits convencionais e determina o bump de versão (patch, minor, major)
 2. Ele cria automaticamente um **Release PR** com a versão atualizada no `Cargo.toml` e o `CHANGELOG.md` gerado

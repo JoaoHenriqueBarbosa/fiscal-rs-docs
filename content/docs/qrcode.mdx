@@ -20,7 +20,7 @@ O módulo `fiscal_core::qrcode` implementa a geração dessa URL nos dois format
 
 O fluxo completo de geração do QR Code e inserção no XML segue o diagrama abaixo:
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     A["XML da NFC-e assinado"] --> B["Extrair campos do XML"]
     B --> C{"Qual versão?"}
@@ -50,7 +50,7 @@ flowchart TD
     style A fill:#e1f5fe
     style Q fill:#e8f5e9
     style I fill:#ffebee
-```
+`} />
 
 ## CSC — Código de Segurança do Contribuinte
 

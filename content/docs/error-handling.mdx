@@ -9,7 +9,7 @@ O `fiscal-rs` adota o padrão idiomático de Rust para tratamento de erros: **to
 
 O `FiscalError` é definido em `fiscal-core` e reutilizado por todos os crates do workspace. Isso garante que o código do usuário precise tratar apenas **um único tipo de erro**, independentemente de qual camada originou a falha.
 
-```mermaid
+<Mermaid chart={`
 flowchart TB
     subgraph core["fiscal-core"]
         direction TB
@@ -41,7 +41,7 @@ flowchart TB
     style crypto fill:#1e293b,stroke:#8b5cf6,color:#e2e8f0
     style sefaz fill:#1e293b,stroke:#10b981,color:#e2e8f0
     style user fill:#0f172a,stroke:#f59e0b,color:#fbbf24
-```
+`} />
 
 ## O enum `FiscalError`
 
@@ -121,7 +121,7 @@ O operador `?` propaga o erro para o chamador sem necessidade de conversão manu
 
 O `FiscalError` flui naturalmente das camadas internas para o código do usuário. Cada crate adiciona seus próprios erros usando `map_err` para converter erros de bibliotecas externas (OpenSSL, reqwest, etc.) em variantes de `FiscalError`.
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
     participant App as Aplicação
     participant Builder as InvoiceBuilder
@@ -155,7 +155,7 @@ sequenceDiagram
         Sefaz-->>App: Err(SefazRejection { code, message })
     end
     Sefaz-->>App: Ok(AuthorizationResponse)
-```
+`} />
 
 ## Exemplos práticos de tratamento
 

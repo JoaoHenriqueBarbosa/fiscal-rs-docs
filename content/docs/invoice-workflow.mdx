@@ -7,7 +7,7 @@ O processo de emissão de uma NF-e ou NFC-e envolve cinco etapas principais: **c
 
 ## Visão geral do fluxo
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     A["1. Configurar dados\n(IssuerData, itens, pagamentos)"] --> B["2. Construir XML\nInvoiceBuilder::new() → .build()"]
     B --> C{"Validação\nok?"}
@@ -31,11 +31,11 @@ flowchart TD
     style L fill:#ffcdd2
     style M fill:#ffcdd2
     style N fill:#fff9c4
-```
+`} />
 
 ## Interação entre os crates
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
     participant App as Aplicação
     participant Core as fiscal-core
@@ -64,7 +64,7 @@ sequenceDiagram
 
     App->>Core: attach_protocol(request_xml, response_xml)
     Core-->>App: nfeProc XML (pronto para armazenamento)
-```
+`} />
 
 ## Etapa 1 — Configurar os dados
 
@@ -477,7 +477,7 @@ async fn emitir_nfce() -> Result<String, fiscal::FiscalError> {
 
 ## Ciclo de vida dos status
 
-```mermaid
+<Mermaid chart={`
 stateDiagram-v2
     [*] --> Pending : build + sign + transmit
     Pending --> Authorized : cStat 100/150
@@ -492,7 +492,7 @@ stateDiagram-v2
     Rejected --> [*] : corrigir e reemitir
     Denied --> [*] : resolução fiscal
     Cancelled --> [*]
-```
+`} />
 
 ## Referência de códigos SEFAZ
 

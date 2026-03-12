@@ -11,7 +11,7 @@ A camada de geracao de XML constroi documentos XML completos e nao assinados de 
 
 ## Estrutura XML da NF-e
 
-```mermaid
+<Mermaid chart={`
 graph TD
     NFe["&lt;NFe xmlns=...&gt;"]
     infNFe["&lt;infNFe Id='NFeXXX' versao='4.00'&gt;"]
@@ -55,7 +55,7 @@ graph TD
     imposto1 --> ipi1
 
     total --> ICMSTot
-```
+`} />
 
 ### XML Resultante (Simplificado)
 
@@ -155,7 +155,7 @@ tag("imposto", &[], TagContent::Children(vec![
 
 A funcao interna `generate_xml()` orquestra a montagem completa da NF-e:
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     START["InvoiceBuildData"]
 
@@ -200,7 +200,7 @@ flowchart TD
     DET --> COF
     DET --> IPI
     DET --> II
-```
+`} />
 
 ## Secoes do XML em Detalhe
 

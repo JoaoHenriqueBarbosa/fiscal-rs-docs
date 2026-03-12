@@ -9,7 +9,7 @@ O modulo `standardize` do `fiscal-core` oferece funcoes para identificar o tipo 
 
 **Arquivo fonte**: `fiscal-core/src/standardize.rs`
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     A["XML bruto\n(SEFAZ / arquivo)"] --> B["identify_xml_type()"]
     B --> C{"Tipo reconhecido?"}
@@ -20,7 +20,7 @@ flowchart LR
     style A fill:#e8f4f8,stroke:#2980b9
     style E fill:#e8f5e9,stroke:#27ae60
     style ERR fill:#fce4ec,stroke:#e53935
-```
+`} />
 
 ## Por que padronizar?
 
@@ -123,7 +123,7 @@ println!("{json_str}");
 
 A conversao XML para JSON segue regras especificas para manter fidelidade ao documento original:
 
-```mermaid
+<Mermaid chart={`
 flowchart TD
     subgraph "Conversao XML → JSON"
         direction TB
@@ -144,7 +144,7 @@ flowchart TD
     style R3 fill:#e8f5e9,stroke:#27ae60
     style R4 fill:#e8f5e9,stroke:#27ae60
     style NS2 fill:#e3f2fd,stroke:#1976d2
-```
+`} />
 
 ### Detalhamento das regras
 
@@ -187,7 +187,7 @@ Quando o XML tem multiplos elementos com o mesmo nome (como `<det>` para itens d
 
 O fluxo tipico em uma aplicacao fiscal integra ambas as funcoes:
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
     participant App as Aplicacao
     participant Std as standardize
@@ -200,7 +200,7 @@ sequenceDiagram
     App->>Std: xml_to_json(xml)
     Std-->>App: JSON padronizado
     App->>App: Processar resposta\ncomo objeto JSON
-```
+`} />
 
 ## Implementacao Interna
 

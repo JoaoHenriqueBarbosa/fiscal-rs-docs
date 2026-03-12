@@ -21,7 +21,7 @@ Rust possui características únicas que o tornam a melhor escolha para bibliote
 
 Todas as bindings compartilham o mesmo núcleo Rust. A lógica fiscal, cálculos de impostos e geração de XML existem em um único lugar — as bindings são camadas finas de tradução.
 
-```mermaid
+<Mermaid chart={`
 graph TB
     subgraph core["fiscal-core (Rust puro)"]
         types["Tipos & Newtypes"]
@@ -71,7 +71,7 @@ graph TB
     wasm --> browser
     uniffi --> kotlin
     uniffi --> swift
-```
+`} />
 
 ## Bindings planejadas
 
@@ -245,7 +245,7 @@ println("Chave: ${resultado.accessKey}")
 
 Cada binding possui seu próprio pipeline de build e publicação:
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     subgraph src["Código-fonte Rust"]
         core["fiscal-core"]
@@ -285,7 +285,7 @@ flowchart LR
     crypto --> maturin
     crypto --> napirs
     crypto --> uniffi_bind
-```
+`} />
 
 ## Estrutura do workspace
 

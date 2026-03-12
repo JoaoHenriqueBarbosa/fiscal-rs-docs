@@ -42,7 +42,7 @@ Pular qualquer etapa resulta em rejeição pela SEFAZ ou, pior, em documentos fi
 
 ## Diagrama de estados
 
-```mermaid
+<Mermaid chart={`
 stateDiagram-v2
     [*] --> Draft : InvoiceBuilder::new()
 
@@ -71,7 +71,7 @@ stateDiagram-v2
     }
 
     Signed --> [*] : Pronto para transmissão
-```
+`} />
 
 ## O que compila e o que não compila
 
@@ -167,7 +167,7 @@ pub struct InvoiceBuilder<State = Draft> {
 
 Cada estado expõe um conjunto diferente de métodos. O compilador simplesmente **não vê** os métodos dos outros estados:
 
-```mermaid
+<Mermaid chart={`
 flowchart LR
     subgraph "impl InvoiceBuilder&lt;Draft&gt;"
         A[".series()"]
@@ -192,7 +192,7 @@ flowchart LR
 
     F -->|transição de tipo| G
     I -->|transição de tipo| J
-```
+`} />
 
 ## A transição de estado: consumindo self
 
@@ -238,7 +238,7 @@ where
 
 ### Por que uma closure?
 
-```mermaid
+<Mermaid chart={`
 flowchart TB
     subgraph "fiscal-core (sem dependência cripto)"
         B["InvoiceBuilder&lt;Built&gt;"]
@@ -256,7 +256,7 @@ flowchart TB
     U --> |"closure"| B
     B --> |".sign_with(&#124;xml&#124; sign_xml(xml, &key, &cert))"| S
     C -.-> |"chamada dentro da closure"| B
-```
+`} />
 
 O `fiscal-core` não depende de OpenSSL, libcrypto ou qualquer crate de assinatura. Quem decide **como** assinar é o chamador:
 

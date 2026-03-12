@@ -26,7 +26,7 @@ Cada estado brasileiro possui seu próprio autorizador SEFAZ ou delega para uma 
 
 O fluxo completo de uma requisição à SEFAZ segue quatro etapas principais: construir o XML de requisição, encapsulá-lo em um envelope SOAP, enviar via HTTPS com mTLS, e parsear a resposta.
 
-```mermaid
+<Mermaid chart={`
 sequenceDiagram
     participant App as Aplicação
     participant Client as SefazClient
@@ -53,7 +53,7 @@ sequenceDiagram
     Parser-->>Client: AuthorizationResponse
 
     Client-->>App: Result<AuthorizationResponse, FiscalError>
-```
+`} />
 
 ### Etapa 1 — Construção do XML de Requisição
 
@@ -128,7 +128,7 @@ if let Some(prot) = &resp.protocol_number {
 
 O enum `SefazService` define todos os serviços disponíveis, cada um com seus metadados SOAP fixos (método, operação WSDL, versão do schema):
 
-```mermaid
+<Mermaid chart={`
 graph LR
     subgraph "SefazService"
         SS["StatusServico"]
@@ -149,7 +149,7 @@ graph LR
     RE -->|"method"| M6["nfeRecepcaoEvento"]
     DD -->|"method"| M7["nfeDistDFeInteresse"]
     CC -->|"method"| M8["consultaCadastro"]
-```
+`} />
 
 ### Tabela Completa de Metadados
 
