@@ -30,10 +30,6 @@ O `fiscal-rs` é uma biblioteca Rust para emissão de documentos fiscais eletrô
     crypto --> core
     sefaz --> core
 
-    style fiscal fill:#4a90d9,stroke:#2c5f8a,color:#fff
-    style core fill:#50b86c,stroke:#2e7d42,color:#fff
-    style crypto fill:#e8a838,stroke:#b07e1e,color:#fff
-    style sefaz fill:#d94a6e,stroke:#8a2c42,color:#fff
 `} />
 
 O `fiscal-core` é o alicerce: tanto `fiscal-crypto` quanto `fiscal-sefaz` dependem dele, mas **não dependem um do outro**. Isso significa que um consumidor que não precisa de assinatura digital pode usar apenas `fiscal-core` + `fiscal-sefaz`, e vice-versa.
@@ -69,9 +65,6 @@ status_codes, gtin, convert"]
     facade --> fcore
     shell --> fcore
 
-    style facade fill:#4a90d9,stroke:#2c5f8a,color:#fff
-    style shell fill:#e8a838,stroke:#b07e1e,color:#fff
-    style fcore fill:#50b86c,stroke:#2e7d42,color:#fff
 `} />
 
 ## Padrão: Functional Core, Imperative Shell

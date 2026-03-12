@@ -33,12 +33,6 @@ flowchart LR
   doctest -->|"cargo test --doc --all-features"| ok4["OK"]
   docs -->|"RUSTDOCFLAGS='-D warnings' cargo doc"| ok5["OK"]
 
-  style push fill:#1e293b,color:#e2e8f0
-  style ok1 fill:#166534,color:#bbf7d0
-  style ok2 fill:#166534,color:#bbf7d0
-  style ok3 fill:#166534,color:#bbf7d0
-  style ok4 fill:#166534,color:#bbf7d0
-  style ok5 fill:#166534,color:#bbf7d0
 `} />
 
 ### Detalhamento dos Jobs
@@ -216,9 +210,6 @@ flowchart TD
   doc -->|FALHOU| block
   denyrun -->|FALHOU| block
 
-  style success fill:#166534,color:#bbf7d0
-  style block fill:#991b1b,color:#fecaca
-  style start fill:#1e293b,color:#e2e8f0
 `} />
 
 ### Instalação
@@ -281,8 +272,4 @@ flowchart TB
   CI_GH -->|"master merge"| Release
   CI_GH -.->|"paralelo"| Audit
 
-  style Local fill:#1e293b,color:#e2e8f0
-  style CI_GH fill:#172554,color:#bfdbfe
-  style Audit fill:#3b0764,color:#e9d5ff
-  style Release fill:#14532d,color:#bbf7d0
 `} />
