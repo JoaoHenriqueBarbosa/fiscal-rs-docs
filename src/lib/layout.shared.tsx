@@ -1,4 +1,5 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
+import Image from 'next/image';
 
 export const gitConfig = {
   user: 'JoaoHenriqueBarbosa',
@@ -9,7 +10,12 @@ export const gitConfig = {
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: 'fiscal-rs',
+      title: (
+        <>
+          <Image src="/logo.png" alt="fiscal-rs" width={24} height={24} />
+          fiscal-rs
+        </>
+      ),
     },
     links: [
       {
