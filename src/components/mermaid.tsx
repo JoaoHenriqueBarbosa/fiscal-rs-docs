@@ -267,7 +267,38 @@ export function Mermaid({ chart }: { chart: string }) {
     import("mermaid").then(async ({ default: mermaid }) => {
       mermaid.initialize({
         startOnLoad: false,
-        theme: isDark ? "dark" : "neutral",
+        theme: "base",
+        themeVariables: isDark
+          ? {
+              primaryColor: "#2a1a0e",
+              primaryTextColor: "#f0e6dc",
+              primaryBorderColor: "#f74c00",
+              secondaryColor: "#1a1a2e",
+              secondaryTextColor: "#e0e0e0",
+              tertiaryColor: "#1a2a1a",
+              tertiaryTextColor: "#e0e0e0",
+              lineColor: "#f74c00",
+              textColor: "#e0e0e0",
+              mainBkg: "#1e1e1e",
+              nodeBorder: "#f74c00",
+              clusterBkg: "#161616",
+              clusterBorder: "#333",
+              titleColor: "#f0e6dc",
+              edgeLabelBackground: "#1e1e1e",
+              nodeTextColor: "#f0e6dc",
+              background: "#0c0d0d",
+              fontFamily: "inherit",
+            }
+          : {
+              primaryColor: "#fff3eb",
+              primaryTextColor: "#1a1a1a",
+              primaryBorderColor: "#f74c00",
+              lineColor: "#a0522d",
+              textColor: "#1a1a1a",
+              mainBkg: "#fff8f3",
+              nodeBorder: "#a0522d",
+              fontFamily: "inherit",
+            },
         fontFamily: "inherit",
       });
 

@@ -3,21 +3,36 @@ title: InvoiceBuilder
 description: Construindo documentos fiscais com o builder typestate
 ---
 
-O `InvoiceBuilder` usa o padrao **typestate** para garantir em tempo de compilacao que o documento fiscal passe pelas etapas corretas: `Draft` → `Built` → `Signed`.
+O `InvoiceBuilder` usa o padrão **typestate** para garantir em tempo de compilação que o documento fiscal passe pelas etapas corretas: `Draft` → `Built` → `Signed`.
 
 ## Ciclo de vida
 
-```
-InvoiceBuilder<Draft>   -- configuracao dos campos
-        |
-      .build()
-        |
-InvoiceBuilder<Built>   -- XML gerado, chave de acesso calculada
-        |
-    .sign_with(...)
-        |
-InvoiceBuilder<Signed>  -- XML assinado, pronto para transmissao
-```
+<Mermaid chart={`
+stateDiagram-v2
+    [*] --> Draft : InvoiceBuilder::new()
+    Draft --> Draft : .series() / .add_item() / .recipient() / ...
+    Draft --> Built : .build()
+    Built --> Signed : .sign_with(closure)
+    Signed --> [*] : .signed_xml()
+
+    state Draft {
+        [*] --> Configuração
+        Configuração : Campos do emissor, itens,
+        Configuração : pagamentos, transporte, etc.
+    }
+
+    state Built {
+        [*] --> XMLGerado
+        XMLGerado : Chave de acesso calculada
+        XMLGerado : XML unsigned disponível
+    }
+
+    state Signed {
+        [*] --> XMLAssinado
+        XMLAssinado : XML-DSig RSA-SHA1 C14N
+        XMLAssinado : Pronto para transmissão
+    }
+`} />
 
 ## Criando uma NF-e
 
