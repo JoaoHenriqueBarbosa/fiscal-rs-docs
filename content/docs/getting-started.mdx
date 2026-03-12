@@ -1,0 +1,92 @@
+---
+title: Primeiros passos
+description: Como instalar e usar o fiscal-rs no seu projeto
+---
+
+## Instalacao
+
+Adicione o crate ao seu projeto:
+
+```bash
+cargo add fiscal
+```
+
+O crate `fiscal` e uma facade que re-exporta todos os sub-crates. Se precisar de apenas uma parte, pode usar os crates individuais:
+
+```bash
+cargo add fiscal-core    # tipos, calculos, builder XML
+cargo add fiscal-crypto  # certificados e assinatura
+cargo add fiscal-sefaz   # comunicacao com SEFAZ
+```
+
+## Dependencias do sistema
+
+O `fiscal-crypto` usa OpenSSL para assinatura digital. No Ubuntu/Debian:
+
+```bash
+sudo apt-get install libssl-dev pkg-config
+```
+
+## Exemplo rapido
+
+```rust
+use fiscal::types::*;
+use fiscal::xml_builder::InvoiceBuilder;
+
+// Criar o emissor
+let issuer = IssuerData::new(
+    "25028332000105",   // CNPJ
+    "140950881119",     // IE
+    "Minha Empresa",
+    TaxRegime::Normal,  // CRT
+    "35",               // UF (SP)
+    "3550308",          // cod. municipio
+    "Rua Principal",
+    "100",
+    "Centro",
+    "SAO PAULO",
+    "01000000",
+);
+
+// Criar item
+let item = InvoiceItemData::new(
+    "001",               // codigo produto
+    "Produto Teste",     // descricao
+    "18069000",          // NCM
+    "5102",              // CFOP
+    "UN",                // unidade
+    1000,                // quantidade (x1000)
+    10000,               // valor unitario em centavos
+    10000,               // valor total em centavos
+    "00",                // CST ICMS
+    1800,                // aliquota ICMS (18.00%)
+    10000,               // base ICMS
+    "01",                // CST PIS
+    "01",                // CST COFINS
+);
+
+// Construir a NF-e
+let invoice = InvoiceBuilder::new(
+    issuer,
+    SefazEnvironment::Homologation,
+    InvoiceModel::NFe,
+)
+.series(1)
+.invoice_number(1)
+.operation_nature("VENDA")
+.add_item(item)
+.payments(vec![PaymentData::new("01", 10000)])
+.build()
+.expect("falha ao construir NF-e");
+
+println!("Chave de acesso: {}", invoice.access_key());
+println!("XML: {}", invoice.xml());
+```
+
+## Proximos passos
+
+<Cards>
+  <Card title="InvoiceBuilder" href="/docs/invoice-builder" />
+  <Card title="Assinatura digital" href="/docs/certificate" />
+  <Card title="Envio para SEFAZ" href="/docs/sefaz" />
+</Cards>

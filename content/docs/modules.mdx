@@ -1,0 +1,50 @@
+---
+title: Modulos
+description: Visao geral de todos os modulos publicos do fiscal-rs
+---
+
+## fiscal-core
+
+| Modulo | Descricao |
+|--------|-----------|
+| `types` | Structs e enums principais (InvoiceModel, IssuerData, RecipientData, etc.) |
+| `xml_builder` | InvoiceBuilder typestate para construcao de NF-e/NFC-e |
+| `xml_utils` | Utilitarios para construcao de tags XML |
+| `complement` | Complementos de NF-e (XML envelope para autorizacao, inutilizacao, etc.) |
+| `contingency` | Ativacao e ajuste de contingencia |
+| `convert` | Conversao de TXT para XML (formato SPED) |
+| `format_utils` | Formatacao de valores monetarios e aliquotas |
+| `gtin` | Validacao de codigos GTIN/EAN |
+| `newtypes` | Tipos validados: TaxId, Gtin, Ncm, Cfop |
+| `standardize` | Padronizacao de XML de NF-e para JSON |
+| `state_codes` | Codigos IBGE dos estados |
+| `status_codes` | Codigos de status SEFAZ |
+| `tax_element` | Elemento generico de imposto |
+| `tax_icms` | Calculo e XML de ICMS |
+| `tax_is` | Calculo e XML de ISSQN |
+| `tax_issqn` | Calculo e XML de ISS |
+| `tax_pis_cofins_ipi` | Calculo e XML de PIS, COFINS e IPI |
+| `qrcode` | Geracao de QR Code para NFC-e |
+| `traits` | Traits selados: TaxCalculation, XmlSerializable |
+| `constants` | Constantes (versoes, namespaces) |
+| `error` | Tipo FiscalError |
+
+## fiscal-crypto
+
+| Modulo | Descricao |
+|--------|-----------|
+| `certificate` | Carregamento de PFX, extracao de info, assinatura XML-DSig |
+
+## fiscal-sefaz
+
+| Modulo | Descricao |
+|--------|-----------|
+| `urls` | URLs dos webservices SEFAZ por estado e ambiente |
+| `services` | Enumeracao de servicos (NfeAutorizacao, etc.) |
+| `request_builders` | Construtores de envelope SOAP |
+| `response_parsers` | Parsers de resposta SOAP/XML |
+| `client` | Client HTTP async com mTLS (feature `client`) |
+
+## Referencia completa
+
+A documentacao completa da API com todos os tipos, funcoes e exemplos esta disponivel no [docs.rs/fiscal](https://docs.rs/fiscal).

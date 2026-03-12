@@ -1,13 +1,38 @@
 ---
-title: Hello World
-description: Your first document
+title: fiscal-rs
+description: Biblioteca Rust para documentos fiscais brasileiros (NF-e / NFC-e)
 ---
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+**fiscal-rs** é um port em Rust da biblioteca PHP [sped-nfe](https://github.com/nfephp-org/sped-nfe), oferecendo geração, assinatura digital e transmissão de documentos fiscais eletrônicos brasileiros com a segurança de tipos e performance do Rust.
 
-## What is Next?
+## Funcionalidades
+
+- Geração de XML de NF-e e NFC-e (modelo 55 e 65)
+- Assinatura digital com certificado A1 (PFX/PKCS#12)
+- Comunicação com os webservices SEFAZ (autorização, consulta, inutilização, eventos)
+- Validação de GTIN, CPF, CNPJ, NCM, CFOP
+- Contingência (SVC-AN, SVC-RS)
+- QR Code para NFC-e
+- Conversão TXT para XML
+
+## Instalacao
+
+```bash
+cargo add fiscal
+```
+
+## Estrutura de Crates
+
+| Crate | Descricao |
+|-------|-----------|
+| `fiscal-core` | Tipos, calculos fiscais, builder XML |
+| `fiscal-crypto` | Certificados digitais e assinatura XML |
+| `fiscal-sefaz` | URLs SEFAZ, builders de request, client HTTP |
+| `fiscal` | Crate facade que re-exporta tudo |
 
 <Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
+  <Card title="Primeiros passos" href="/docs/getting-started" />
+  <Card title="InvoiceBuilder" href="/docs/invoice-builder" />
+  <Card title="Certificados" href="/docs/certificate" />
+  <Card title="API Reference (docs.rs)" href="https://docs.rs/fiscal" />
 </Cards>

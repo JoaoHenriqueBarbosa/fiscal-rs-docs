@@ -1,17 +1,33 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
 
-// fill this with your actual GitHub info, for example:
 export const gitConfig = {
-  user: 'fuma-nama',
-  repo: 'fumadocs',
-  branch: 'main',
+  user: 'JoaoHenriqueBarbosa',
+  repo: 'fiscal-rs',
+  branch: 'master',
 };
 
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: 'My App',
+      title: 'fiscal-rs',
     },
+    links: [
+      {
+        text: 'Docs',
+        url: '/docs',
+        active: 'nested-url',
+      },
+      {
+        text: 'API Reference',
+        url: 'https://docs.rs/fiscal',
+        external: true,
+      },
+      {
+        text: 'crates.io',
+        url: 'https://crates.io/crates/fiscal',
+        external: true,
+      },
+    ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };
 }

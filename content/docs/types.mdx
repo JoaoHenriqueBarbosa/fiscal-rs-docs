@@ -1,0 +1,93 @@
+---
+title: Tipos principais
+description: Enums, structs e newtypes do fiscal-rs
+---
+
+## Enums
+
+### InvoiceModel
+
+```rust
+pub enum InvoiceModel {
+    NFe,   // modelo 55
+    NFCe,  // modelo 65
+}
+```
+
+### SefazEnvironment
+
+```rust
+pub enum SefazEnvironment {
+    Production,   // "1"
+    Homologation, // "2"
+}
+```
+
+### EmissionType
+
+```rust
+pub enum EmissionType {
+    Normal,     // "1"
+    Contingency, // outros valores
+}
+```
+
+### TaxRegime (CRT)
+
+```rust
+pub enum TaxRegime {
+    SimplesNacional,   // "1"
+    ExcessoSublimite,  // "2"
+    Normal,            // "3"
+}
+```
+
+### ContingencyType
+
+```rust
+pub enum ContingencyType {
+    SvcAn, // "6"
+    SvcRs, // "7"
+}
+```
+
+## Newtypes validados
+
+O modulo `newtypes` fornece tipos que validam o formato na construcao:
+
+```rust
+use fiscal::newtypes::{TaxId, Gtin, Ncm, Cfop};
+
+let cnpj = TaxId::new("25028332000105")?;   // valida CPF ou CNPJ
+let ean = Gtin::new("7891234567890")?;       // valida GTIN-8/12/13/14
+let ncm = Ncm::new("18069000")?;            // valida NCM (8 digitos)
+let cfop = Cfop::new("5102")?;              // valida CFOP (4 digitos)
+```
+
+## Unidades monetarias
+
+O fiscal-rs usa **centavos como inteiros** para evitar erros de ponto flutuante:
+
+```rust
+type Cents = i64;   // R$ 100,00 = 10000
+type Rate = i64;    // 18.00% = 1800
+type Rate4 = i64;   // 1.6500% = 16500
+```
+
+## Structs de dados
+
+| Struct | Descricao |
+|--------|-----------|
+| `IssuerData` | Dados do emissor (CNPJ, IE, endereco) |
+| `RecipientData` | Dados do destinatario |
+| `InvoiceItemData` | Item da nota fiscal |
+| `PaymentData` | Forma de pagamento |
+| `ContingencyData` | Dados de contingencia |
+| `TransportData` | Informacoes de transporte |
+| `BillingData` | Fatura e duplicatas |
+| `AdditionalInfo` | Informacoes adicionais |
+| `CertificateData` | Chave privada + certificado PEM |
+| `CertificateInfo` | Metadados do certificado (CN, validade) |
+| `AccessKeyParams` | Parametros para gerar chave de acesso |
+
+Todos os builders usam o padrao **fluent** com metodos encadeados. Consulte a [API Reference](https://docs.rs/fiscal) para detalhes de cada campo.

@@ -1,0 +1,88 @@
+---
+title: Comunicacao SEFAZ
+description: URLs, request builders e client HTTP para os webservices SEFAZ
+---
+
+O crate `fiscal-sefaz` fornece tudo necessario para comunicacao com os webservices da SEFAZ: URLs por estado, builders de envelope SOAP e um client HTTP async.
+
+## Modulos
+
+| Modulo | Descricao |
+|--------|-----------|
+| `sefaz::urls` | URLs dos webservices por estado e ambiente |
+| `sefaz::services` | Enumeracao dos servicos disponiveis |
+| `sefaz::request_builders` | Construtores de envelope SOAP |
+| `sefaz::response_parsers` | Parsers de resposta XML |
+| `sefaz::client` | Client HTTP async (feature `client`) |
+
+## URLs por estado
+
+```rust
+use fiscal::sefaz::urls;
+
+// Obter URL de autorizacao para SP em homologacao
+let url = urls::get_url("35", "2", "NfeAutorizacao");
+```
+
+## Request builders
+
+Os builders criam o envelope SOAP para cada operacao:
+
+```rust
+use fiscal::sefaz::request_builders;
+
+// Envelope de autorizacao
+let envelope = request_builders::build_authorization_request(&signed_xml);
+
+// Envelope de consulta por chave
+let envelope = request_builders::build_query_request(&access_key);
+
+// Envelope de inutilizacao
+let envelope = request_builders::build_inutilization_request(&inut_xml);
+
+// Envelope de evento (cancelamento, CCe, etc.)
+let envelope = request_builders::build_event_request(&event_xml);
+
+// Envelope de consulta de recibo
+let envelope = request_builders::build_receipt_query_request(&receipt_number);
+
+// Envelope de status do servico
+let envelope = request_builders::build_status_request(&state_code, &environment);
+```
+
+## Response parsers
+
+```rust
+use fiscal::sefaz::response_parsers;
+
+// Parsear resposta de autorizacao
+let result = response_parsers::parse_authorization_response(&response_xml)?;
+
+// Parsear resposta de consulta
+let result = response_parsers::parse_query_response(&response_xml)?;
+```
+
+## Client HTTP (feature `client`)
+
+O client async usa `reqwest` e esta disponivel com a feature `client` (habilitada por padrao):
+
+```rust
+use fiscal::sefaz::client::SefazClient;
+
+let pfx_bytes = std::fs::read("certificado.pfx")?;
+let client = SefazClient::new(&pfx_bytes, "senha")?;
+
+// O client configura mTLS automaticamente usando o certificado
+```
+
+## Servicos disponiveis
+
+| Servico | Descricao |
+|---------|-----------|
+| `NfeAutorizacao` | Autorizacao de NF-e |
+| `NfeRetAutorizacao` | Consulta recibo de autorizacao |
+| `NfeConsultaProtocolo` | Consulta por chave de acesso |
+| `NfeInutilizacao` | Inutilizacao de numeracao |
+| `NfeStatusServico` | Status do servico |
+| `RecepcaoEvento` | Recepcao de eventos |
+| `NFeDistribuicaoDFe` | Distribuicao de DF-e |

@@ -1,0 +1,74 @@
+---
+title: Certificados digitais
+description: Carregamento de certificados A1 e assinatura XML
+---
+
+O modulo `fiscal::certificate` fornece funcoes para carregar certificados digitais A1 (PFX/PKCS#12) e assinar documentos XML conforme o padrao da NF-e.
+
+## Carregando um certificado
+
+```rust
+use fiscal::certificate::load_certificate;
+
+let pfx_bytes = std::fs::read("certificado.pfx")?;
+let cert_data = load_certificate(&pfx_bytes, "senha")?;
+
+// cert_data.private_key  - chave privada PEM
+// cert_data.certificate  - certificado PEM
+```
+
+## Informacoes do certificado
+
+```rust
+use fiscal::certificate::get_certificate_info;
+
+let info = get_certificate_info(&pfx_bytes, "senha")?;
+
+println!("Titular: {}", info.common_name);    // contem CNPJ ou CPF
+println!("Valido ate: {}", info.valid_until);  // DateTime
+```
+
+## Assinando XML de NF-e
+
+```rust
+use fiscal::certificate::sign_xml;
+
+let signed = sign_xml(xml, &cert_data.private_key, &cert_data.certificate)?;
+```
+
+A assinatura segue o padrao XML-DSig com:
+- Canonicalizacao C14N
+- Algoritmo RSA-SHA1
+- Transform enveloped-signature
+- Referencia ao elemento `infNFe`
+
+## Assinando XML de evento
+
+Para eventos (cancelamento, carta de correcao, etc.):
+
+```rust
+use fiscal::certificate::sign_event_xml;
+
+let signed = sign_event_xml(xml, &cert_data.private_key, &cert_data.certificate)?;
+```
+
+## Usando com InvoiceBuilder
+
+O metodo mais pratico e usar `.sign_with()` no builder:
+
+```rust
+let signed_invoice = invoice.sign_with(|xml| {
+    sign_xml(xml, &cert_data.private_key, &cert_data.certificate)
+})?;
+
+let xml_final = signed_invoice.signed_xml();
+```
+
+## Tipos de certificado
+
+| Tipo | Suportado | Formato |
+|------|-----------|---------|
+| A1 | Sim | PFX / PKCS#12 |
+| A3 | Nao | Token/smartcard |
+
+O fiscal-rs suporta apenas certificados **A1** (arquivo `.pfx`). Certificados A3 (hardware) nao sao suportados.

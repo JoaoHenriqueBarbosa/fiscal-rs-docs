@@ -1,0 +1,148 @@
+---
+title: InvoiceBuilder
+description: Construindo documentos fiscais com o builder typestate
+---
+
+O `InvoiceBuilder` usa o padrao **typestate** para garantir em tempo de compilacao que o documento fiscal passe pelas etapas corretas: `Draft` → `Built` → `Signed`.
+
+## Ciclo de vida
+
+```
+InvoiceBuilder<Draft>   -- configuracao dos campos
+        |
+      .build()
+        |
+InvoiceBuilder<Built>   -- XML gerado, chave de acesso calculada
+        |
+    .sign_with(...)
+        |
+InvoiceBuilder<Signed>  -- XML assinado, pronto para transmissao
+```
+
+## Criando uma NF-e
+
+### 1. Emissor (IssuerData)
+
+```rust
+use fiscal::types::*;
+
+let issuer = IssuerData::new(
+    "25028332000105",   // CNPJ
+    "140950881119",     // IE
+    "Minha Empresa LTDA",
+    TaxRegime::Normal,
+    "35",               // codigo UF
+    "3550308",          // codigo municipio IBGE
+    "Rua Principal",
+    "100",
+    "Centro",
+    "SAO PAULO",
+    "01000000",         // CEP
+);
+```
+
+Campos opcionais via builder:
+- `.trade_name("Nome Fantasia")`
+- `.address_complement("Sala 1")`
+
+### 2. Destinatario (RecipientData)
+
+```rust
+let recipient = RecipientData::new("17812455000295", "Cliente LTDA")
+    .state_tax_id("142304338112")
+    .street("Rua do Cliente")
+    .street_number("200")
+    .district("Bairro")
+    .city_code(IbgeCode::new("3550308"))
+    .city_name("SAO PAULO")
+    .state_code("SP")
+    .zip_code("05302001");
+```
+
+### 3. Itens (InvoiceItemData)
+
+```rust
+let item = InvoiceItemData::new(
+    "001",           // c_prod
+    "Produto",       // descricao
+    "18069000",      // NCM
+    "5102",          // CFOP
+    "UN",            // unidade
+    1000,            // quantidade (x1000)
+    10000,           // valor unitario (centavos)
+    10000,           // valor total (centavos)
+    "00",            // CST ICMS
+    1800,            // aliquota ICMS
+    10000,           // base ICMS
+    "01",            // CST PIS
+    "01",            // CST COFINS
+)
+.c_ean("7891234567890")
+.cest("1700700")
+.v_frete(500)
+.v_desc(100);
+```
+
+### 4. Construindo
+
+```rust
+use fiscal::xml_builder::InvoiceBuilder;
+
+let invoice = InvoiceBuilder::new(issuer, SefazEnvironment::Homologation, InvoiceModel::NFe)
+    .series(1)
+    .invoice_number(502)
+    .operation_nature("VENDA")
+    .recipient(recipient)
+    .items(vec![item])
+    .payments(vec![PaymentData::new("01", 10000)])
+    .build()?;
+
+// Acesso ao XML e chave
+let xml = invoice.xml();
+let access_key = invoice.access_key();
+```
+
+### 5. Assinando
+
+```rust
+use fiscal::certificate::{load_certificate, sign_xml};
+
+let pfx = std::fs::read("certificado.pfx")?;
+let cert = load_certificate(&pfx, "senha")?;
+
+let signed = invoice.sign_with(|xml| {
+    sign_xml(xml, &cert.private_key, &cert.certificate)
+})?;
+
+let signed_xml = signed.signed_xml();
+```
+
+## Campos opcionais
+
+O builder aceita diversos campos opcionais:
+
+| Metodo | Descricao |
+|--------|-----------|
+| `.contingency(data)` | Dados de contingencia |
+| `.transport(data)` | Informacoes de transporte |
+| `.billing(data)` | Fatura e duplicatas |
+| `.additional_info(info)` | Informacoes adicionais |
+| `.references(refs)` | Documentos referenciados |
+| `.intermediary(data)` | Indicador de intermediador |
+| `.tech_responsible(data)` | Responsavel tecnico |
+| `.purchase(data)` | Dados de compra |
+| `.export(data)` | Dados de exportacao |
+
+## NFC-e (modelo 65)
+
+Para NFC-e, use `InvoiceModel::NFCe`:
+
+```rust
+let invoice = InvoiceBuilder::new(issuer, SefazEnvironment::Homologation, InvoiceModel::NFCe)
+    .series(1)
+    .invoice_number(1)
+    .operation_nature("VENDA")
+    .add_item(item)
+    .payments(vec![PaymentData::new("01", 10000)])
+    .build()?;
+```

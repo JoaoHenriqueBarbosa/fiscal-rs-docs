@@ -1,0 +1,15 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "getting-started",
+    "---Guias---",
+    "invoice-builder",
+    "certificate",
+    "contingency",
+    "sefaz",
+    "---Referencia---",
+    "modules",
+    "types"
+  ]
+}

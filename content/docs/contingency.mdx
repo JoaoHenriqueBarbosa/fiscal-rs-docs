@@ -1,0 +1,64 @@
+---
+title: Contingencia
+description: Emissao em contingencia quando o SEFAZ esta indisponivel
+---
+
+Quando o webservice SEFAZ esta fora do ar, a NF-e pode ser emitida em modo de contingencia. O fiscal-rs suporta os tipos SVC-AN e SVC-RS.
+
+## Tipos de contingencia
+
+| Tipo | Descricao | Uso |
+|------|-----------|-----|
+| `SvcAn` | Servico Virtual de Contingencia - Ambiente Nacional | Maioria dos estados |
+| `SvcRs` | Servico Virtual de Contingencia - Rio Grande do Sul | RS e alguns estados |
+
+## Ativando contingencia
+
+```rust
+use fiscal::contingency::Contingency;
+use fiscal::types::ContingencyType;
+
+let mut cont = Contingency::new();
+cont.activate(ContingencyType::SvcAn, "SEFAZ fora do ar")?;
+```
+
+## Usando no InvoiceBuilder
+
+Passe os dados de contingencia ao builder:
+
+```rust
+use fiscal::types::ContingencyData;
+
+let contingency = ContingencyData::new(
+    ContingencyType::SvcAn,
+    "Motivo da contingencia",
+    "2024-01-15T10:30:00-03:00",
+);
+
+let invoice = InvoiceBuilder::new(issuer, env, model)
+    .contingency(contingency)
+    // ... demais campos
+    .build()?;
+```
+
+## Ajustando XML existente
+
+Para ajustar um XML de NF-e ja gerado para contingencia:
+
+```rust
+use fiscal::contingency::{Contingency, adjust_nfe_contingency};
+
+let mut cont = Contingency::new();
+cont.activate(ContingencyType::SvcAn, "SEFAZ indisponivel")?;
+
+let xml_contingencia = adjust_nfe_contingency(&xml_original, &cont)?;
+```
+
+O XML ajustado tera:
+- `tpEmis` alterado para o tipo de contingencia
+- `dhCont` com a data/hora da entrada em contingencia
+- `xJust` com a justificativa
+
+## Restricoes
+
+- NFC-e (modelo 65) **nao suporta** contingencia SVC. Tentar ajustar um XML de NFC-e para SVC retorna erro.
