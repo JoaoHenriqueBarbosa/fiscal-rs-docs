@@ -184,7 +184,7 @@ export default function HomePage() {
             <p>
               O <strong className="text-[#c9cbcf]">sped-nfe</strong> em PHP é a referência do mercado — 2.400+ stars,
               usado em produção por milhares de empresas no Brasil. Portamos ele primeiro para{" "}
-              <strong className="text-[#c9cbcf]">TypeScript</strong> no projeto FinOpenPOS.
+              <strong className="text-[#c9cbcf]">TypeScript</strong> no projeto <a href="https://fin-open-pos.johnenrique.tech/" target="_blank" rel="noopener noreferrer" className="text-[#f74c00] hover:underline">FinOpenPOS</a>.
             </p>
             <p>
               Mas a pergunta ficou: e se em vez de manter uma versão por linguagem, a gente escrevesse{" "}
