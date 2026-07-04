@@ -1,0 +1,41 @@
+name: Badges
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  badges:
+    name: Refresh metric badges
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Compute metrics
+        id: m
+        run: |
+          PAGES=$(find content -name '*.mdx' 2>/dev/null | wc -l)
+          DIAG=$(grep -rl -e 'Mermaid' -e 'mermaid' content 2>/dev/null | wc -l)
+          CLOC=$(find content -name '*.mdx' 2>/dev/null | xargs wc -l | tail -1 | awk '{print $1}')
+          echo "pages=$PAGES" >> "$GITHUB_OUTPUT"
+          echo "diag=$DIAG" >> "$GITHUB_OUTPUT"
+          echo "cloc=$CLOC" >> "$GITHUB_OUTPUT"
+      - name: Write badge endpoints
+        run: |
+          mkdir -p .github/badges
+          printf '{"schemaVersion":1,"label":"docs pages","message":"%s","color":"blue"}\n' "${{ steps.m.outputs.pages }}" > .github/badges/docs-pages.json
+          printf '{"schemaVersion":1,"label":"mermaid diagrams","message":"%s","color":"blue"}\n' "${{ steps.m.outputs.diag }}" > .github/badges/diagrams.json
+          printf '{"schemaVersion":1,"label":"content lines","message":"%s","color":"blue"}\n' "${{ steps.m.outputs.cloc }}" > .github/badges/content-loc.json
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet .github/badges; then
+            git add .github/badges
+            git commit -m "ci(badges): refresh metrics [skip ci]"
+            git push
+          else
+            echo "badges unchanged"
+          fi
