@@ -73,9 +73,11 @@ graph TB
     uniffi --> swift
 `} />
 
-## Bindings planejadas
+## Bindings por linguagem
 
-### Python via PyO3
+A binding Node.js já está disponível no npm. As demais (Python, WebAssembly e mobile) estão planejadas.
+
+### Python via PyO3 (planejada)
 
 [PyO3](https://pyo3.rs) é o framework padrão para criar extensões nativas de Python em Rust. Combinado com [maturin](https://www.maturin.rs/), permite publicar no PyPI com `pip install`.
 
@@ -146,7 +148,11 @@ print(f"XML: {resultado.xml}")
 
 ### Node.js via napi-rs
 
-[napi-rs](https://napi.rs) gera addons nativos para Node.js com definições TypeScript automáticas. A performance é 10-100x superior ao JavaScript puro para operações como geração de XML e cálculos fiscais.
+<Callout type="info">
+A binding Node.js já está publicada como [`@fiscal-rs/node`](https://www.npmjs.com/package/@fiscal-rs/node) no npm (`npm install @fiscal-rs/node`), com binários pré-compilados para Linux, macOS e Windows (x64 e arm64).
+</Callout>
+
+[napi-rs](https://napi.rs) gera addons nativos para Node.js com definições TypeScript automáticas. A performance é superior ao JavaScript puro para operações como geração de XML e cálculos fiscais.
 
 ```rust
 use napi_derive::napi;
@@ -189,25 +195,54 @@ pub fn build_invoice_xml(
 
 **Uso em TypeScript:**
 
-```typescript
-import { buildInvoiceXml } from '@fiscal-rs/core';
+`buildInvoice` recebe um único objeto de configuração (campos em camelCase,
+equivalentes a `InvoiceBuildData`) e retorna `{ xml, accessKey }`. Enums são
+strings em camelCase (`'nfe'`, `'homologation'`, `'simplesNacional'`) e
+valores monetários são inteiros em centavos.
 
-const resultado = buildInvoiceXml(
-  '25028332000105',
-  '140950881119',
-  'Minha Empresa',
-  [{
-    codigo: '001',
-    descricao: 'Produto Teste',
+```typescript
+import { buildInvoice } from '@fiscal-rs/node';
+
+const { xml, accessKey } = buildInvoice({
+  model: 'nfe',
+  environment: 'homologation',
+  operationNature: 'VENDA',
+  issuer: {
+    taxId: '12345678000199',
+    stateTaxId: '123456789',
+    companyName: 'Minha Empresa',
+    taxRegime: 'simplesNacional',
+    stateCode: 'SP',
+    cityCode: '3550308',
+    cityName: 'Sao Paulo',
+    street: 'Av Paulista',
+    streetNumber: '1000',
+    district: 'Bela Vista',
+    zipCode: '01310100',
+  },
+  items: [{
+    itemNumber: 1,
+    productCode: '001',
+    description: 'Produto Teste',
     ncm: '18069000',
     cfop: '5102',
-    valorTotal: 10000,
+    unitOfMeasure: 'UN',
+    quantity: 1,
+    unitPrice: 10000,   // centavos
+    totalPrice: 10000,
+    icmsCst: '102',
+    icmsRate: 0,
+    icmsAmount: 0,
+    pisCst: '99',
+    cofinsCst: '99',
   }],
-);
+});
 
-console.log(`Chave: ${resultado.accessKey}`);
-console.log(`XML: ${resultado.xml}`);
+console.log(`Chave: ${accessKey}`); // 44 dígitos
+console.log(xml);
 ```
+
+Para gerar e assinar em uma etapa, use `buildAndSignInvoice(config, privateKey, certificate)`, que retorna `{ xml, signedXml, accessKey }`.
 
 ### WebAssembly via wasm-bindgen
 
@@ -261,7 +296,7 @@ flowchart LR
     subgraph build_node["Build Node.js"]
         napirs["napi build\n--release"]
         addon["addon nativo\n(.node)"]
-        npm["npm\nnpm i @fiscal-rs/core"]
+        npm["npm\nnpm i @fiscal-rs/node"]
     end
 
     subgraph build_wasm["Build WASM"]
@@ -322,7 +357,7 @@ fiscal-rs/
 | **Caso de uso** | Backend, scripts | Backend, API | Frontend web | Mobile (PDV) |
 
 <Callout type="warn">
-As bindings FFI estão em fase de planejamento. A API Rust nativa (`fiscal-core`, `fiscal-crypto`, `fiscal-sefaz`) é a interface estável atual. Contribuições para as bindings são bem-vindas!
+A binding Node.js (`@fiscal-rs/node`) já está publicada; as demais (Python, WASM, mobile) estão planejadas. A API Rust nativa (`fiscal-core`, `fiscal-crypto`, `fiscal-sefaz`) segue sendo a interface de referência. Contribuições para as bindings são bem-vindas!
 </Callout>
 
 <Cards>
