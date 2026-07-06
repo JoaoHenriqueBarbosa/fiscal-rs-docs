@@ -1,0 +1,140 @@
+---
+title: "fiscal-cte: CT-e, CT-e OS, GTV-e e BP-e"
+description: Crate para construcao e assinatura de documentos de transporte — CT-e (57), CT-e OS (67), GTV-e e BP-e (63).
+---
+
+O **fiscal-cte** cobre quatro documentos do ecossistema de transporte fiscal brasileiro, todos baseados no leiaute 4.00 da SEFAZ:
+
+| Documento | Modelo | Funcao de build | Funcao de assinatura |
+|-----------|--------|-----------------|----------------------|
+| CT-e (Conhecimento de Transporte) | 57 | `build_cte_xml` | `sign_cte_xml` |
+| CT-e OS (Outros Servicos) | 67 | `build_cteos_xml` | `sign_cteos_xml` |
+| GTV-e (Guia de Transporte de Valores) | — | `build_gtve_xml` | `sign_gtve_xml` |
+| BP-e (Bilhete de Passagem) | 63 | `build_bpe_xml` | `sign_bpe_xml` |
+
+```toml
+[dependencies]
+fiscal-cte   = { version = "0.1.0" }
+fiscal-crypto = { version = "0.3.1" }
+```
+
+## CT-e (modelo 57)
+
+### Fluxo basico
+
+```rust
+use fiscal_cte::{build_cte_xml, CteBuildData};
+use fiscal_crypto::certificate::{load_certificate, sign_cte_xml};
+
+let data   = CteBuildData { /* ide, emit, dest, vPrest, imp, infCTeNorm, ... */ };
+let xml    = build_cte_xml(&data)?;
+let cert   = load_certificate(&pfx_bytes, "senha")?;
+let signed = sign_cte_xml(&xml, &cert.private_key, &cert.certificate)?;
+```
+
+### Tipos principais
+
+| Campo de `CteBuildData` | Descricao |
+|------------------------|-----------|
+| `ide` | Identificacao (UF, CFOP, modal, tpServ, municOri/Dest) |
+| `emit` | Emitente |
+| `rem`, `exped`, `receb`, `dest` | Remetente, Expedidor, Recebedor, Destinatario (todos opcionais exceto `dest`) |
+| `v_prest` | Valor da prestacao (vTPrest, vRec, Comp[]) |
+| `imp` | Impostos (ICMS, vTotTrib) |
+| `inf_cte_norm` | Bloco normal (infCarga, infDoc, infModal) |
+| `inf_cte_comp` | Chaves CT-e complementados (mutuamente exclusivo com `inf_cte_norm`) |
+| `aut_xml` | CNPJs autorizados a receber o XML |
+
+### CT-e Complementar
+
+Quando `inf_cte_comp` nao e vazio, o builder emite blocos `<infCteComp><chCTe>...</chCTe></infCteComp>` no lugar de `<infCTeNorm>`:
+
+```rust
+let data = CteBuildData {
+    inf_cte_comp: vec!["35240...44digitschave".to_string()],
+    inf_cte_norm: Default::default(), // ignorado
+    // ...
+};
+```
+
+## CT-e OS (modelo 67)
+
+O CT-e OS compartilha o schema de `<infCte>` com o CT-e 57, mas usa `<CTeOS>` como elemento-raiz em vez de `<CTe>`. Isso afeta a assinatura — a `<Signature>` e inserida dentro de `<CTeOS>`, nao de `<CTe>`.
+
+<Callout type="warn">
+Nao use `sign_cte_xml` para CT-e OS. Use `sign_cteos_xml`. A diferenca e o `parent_tag` passado ao XMLDSig — trocar gera um XML tecnicamente invalido que a SEFAZ rejeita.
+</Callout>
+
+```rust
+use fiscal_cte::{build_cteos_xml, CteOsBuildData};
+use fiscal_crypto::certificate::sign_cteos_xml;
+
+let xml    = build_cteos_xml(&data)?;
+let signed = sign_cteos_xml(&xml, &pk, &cert)?;
+```
+
+## GTV-e (Guia de Transporte de Valores)
+
+A GTV-e e um documento complementar ao CT-e para transporte de valores. O builder produz o XML do bloco `<infGTVe>` pronto para ser incluido no CT-e correspondente:
+
+```rust
+use fiscal_cte::{build_gtve_xml, GtveBuildData};
+use fiscal_crypto::certificate::sign_gtve_xml;
+
+let xml    = build_gtve_xml(&data)?;
+let signed = sign_gtve_xml(&xml, &pk, &cert)?;
+```
+
+## BP-e (modelo 63)
+
+O BP-e (Bilhete de Passagem Eletronico) cobre o transporte rodoviario de passageiros. Estrutura similar ao CT-e mas com schema proprio (`bpe_v1.00.xsd`):
+
+```rust
+use fiscal_cte::{build_bpe_xml, BpeBuildData};
+use fiscal_crypto::certificate::sign_bpe_xml;
+
+let xml    = build_bpe_xml(&data)?;
+let signed = sign_bpe_xml(&xml, &pk, &cert)?;
+```
+
+## Assinatura
+
+Todos os documentos de transporte usam **RSA-SHA1**. A SEFAZ nao aceita SHA-256 para o CT-e (igual ao MDF-e e NF-e).
+
+| Funcao | Elemento assinado | Parent (recebe `<Signature>`) |
+|--------|-------------------|-------------------------------|
+| `sign_cte_xml` | `<infCte Id="CTe...">` | `<CTe>` |
+| `sign_cteos_xml` | `<infCte Id="CTe...">` | `<CTeOS>` |
+| `sign_gtve_xml` | `<infGTVe Id="GTV...">` | `<GTVe>` |
+| `sign_bpe_xml` | `<infBPe Id="BPe...">` | `<BPe>` |
+
+Todas as variacoes `_with_algorithm` permitem especificar `SignatureAlgorithm::Sha256`, mas use apenas em ambientes que explicitamente exijam (nao e o caso da SEFAZ de transporte).
+
+## Fuso horario por UF
+
+Identico ao MDF-e: o `dhEmi` usa o offset da `UFEnv`. O builder converte automaticamente:
+
+```
+AC → -05:00   AM/RO/RR/MT/MS → -04:00   demais → -03:00
+```
+
+## Validacao XSD
+
+```toml
+[dev-dependencies]
+fiscal-xsd = { version = "0.1.0", features = ["cte", "bpe"] }
+```
+
+```rust
+let signed_cte  = sign_cte_xml(&xml, &pk, &cert)?;
+let signed_bpe  = sign_bpe_xml(&xml_bpe, &pk, &cert)?;
+
+fiscal_xsd::schemas::cte().validate(&signed_cte)?;
+fiscal_xsd::schemas::bpe().validate(&signed_bpe)?;
+```
+
+<Cards>
+  <Card title="fiscal-xsd" href="/docs/fiscal-xsd" />
+  <Card title="fiscal-mdfe" href="/docs/fiscal-mdfe" />
+  <Card title="fiscal-nfse" href="/docs/fiscal-nfse" />
+</Cards>

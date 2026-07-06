@@ -1,0 +1,140 @@
+---
+title: "fiscal-mdfe: MDF-e (Modelo 58)"
+description: Crate para construcao, assinatura e validacao do Manifesto Eletronico de Documentos Fiscais (MDF-e, modelo 58).
+---
+
+O **fiscal-mdfe** implementa o MDF-e (Manifesto Eletronico de Documentos Fiscais), documento obrigatorio para transportadoras que movimentam cargas com NF-e ou CT-e em transporte interestadual ou intermunicipal.
+
+```toml
+[dependencies]
+fiscal-mdfe  = { version = "0.1.0" }
+fiscal-crypto = { version = "0.3.1" } # para assinar
+```
+
+## Fluxo de emissao
+
+<Mermaid chart={`
+flowchart LR
+    dados["MdfeBuildData\n(ide, emit, tot, infDoc, modal)"]
+    build["build_mdfe_xml()"]
+    xml["XML nao-assinado"]
+    cert["load_certificate(pfx, senha)"]
+    sign["sign_mdfe_xml()"]
+    signed["XML assinado"]
+    sefaz["SEFAZ\n(MdfAutorizacao)"]
+
+    dados --> build --> xml
+    cert --> sign
+    xml --> sign --> signed --> sefaz
+`} />
+
+```rust
+use fiscal_mdfe::{build_mdfe_xml, MdfeBuildData};
+use fiscal_crypto::certificate::{load_certificate, sign_mdfe_xml};
+
+let data = MdfeBuildData { /* ... */ };
+let xml    = build_mdfe_xml(&data)?;
+
+let cert   = load_certificate(&pfx_bytes, "senha")?;
+let signed = sign_mdfe_xml(&xml, &cert.private_key, &cert.certificate)?;
+```
+
+## Tipos principais
+
+### `MdfeBuildData`
+
+Estrutura raiz que agrupa todos os blocos do MDF-e:
+
+| Campo | Tipo | Descricao |
+|-------|------|-----------|
+| `ide` | `Ide` | Identificacao (UF, serie, numero, dhEmi, modal, etc.) |
+| `emit` | `Emit` | Dados do emitente (CNPJ, IE, endereco) |
+| `tot` | `Tot` | Totalizadores (qtd NF-e, qtd CT-e, peso bruto) |
+| `inf_doc` | `InfDoc` | NFes ou CTes transportados |
+| `modal` | `Modal` | Detalhamento por modal (rodoviario, aereo, aquaviario, ferroviario) |
+| `inf_resp_tec` | `Option<InfRespTec>` | Responsavel tecnico (opcional) |
+
+### `Modal`
+
+```rust
+pub enum Modal {
+    Rodoviario(ModoRod),    // tpModal = "1"
+    Aereo(ModoAer),         // tpModal = "2"
+    Aquaviario(ModoAqua),   // tpModal = "3"
+    Ferroviario(ModoFerr),  // tpModal = "4"
+}
+```
+
+### `InfDoc`
+
+Aceita NF-es ou CT-es — nunca os dois no mesmo MDF-e:
+
+```rust
+pub enum InfDoc {
+    NFe(Vec<InfNFe>),
+    CTe(Vec<InfCTe>),
+}
+```
+
+## Assinatura
+
+O MDF-e usa **RSA-SHA1**, identico ao NF-e. A SEFAZ rejeita SHA-256 para o MDF-e (cStat 225 — falha no schema).
+
+```rust
+use fiscal_crypto::certificate::{sign_mdfe_xml, sign_mdfe_xml_with_algorithm, SignatureAlgorithm};
+
+// SHA-1 (obrigatorio para SEFAZ)
+let signed = sign_mdfe_xml(&xml, &pk, &cert)?;
+
+// SHA-256 disponivel mas nao aceito pela SEFAZ para MDF-e
+let signed = sign_mdfe_xml_with_algorithm(&xml, &pk, &cert, SignatureAlgorithm::Sha256)?;
+```
+
+A assinatura envelopa o elemento `<infMDFe Id="MDFe...">` e insere `<Signature>` como filho direto de `<MDFe>`.
+
+## Chave de acesso
+
+```rust
+use fiscal_mdfe::generate_mdfe_access_key;
+
+// gera a chave de 44 digitos a partir dos campos do ide
+let chave = generate_mdfe_access_key(&ide, &emit_cnpj, None)?;
+// formato: cUF(2) AAMM(4) CNPJ(14) mod(2) serie(3) nMDF(9) tpEmis(1) cMDF(9) cDV(1)
+```
+
+## Fuso horario por UF
+
+<Callout type="warn">
+O campo `dhEmi` deve usar o offset da UF de carregamento (`ufIni`), nao UTC nem o fuso do servidor. O `build_mdfe_xml` faz a conversao automaticamente via `format_datetime_mdfe(&dt, &uf)`.
+</Callout>
+
+A regra de offset aplicada internamente:
+
+| UF | Offset |
+|----|--------|
+| AC | -05:00 |
+| AM, RO, RR, MT, MS | -04:00 |
+| Demais | -03:00 (BRT) |
+
+O `format_datetime_mdfe` recebe qualquer `DateTime<FixedOffset>` e converte para o offset correto da UF, preservando o instante absoluto. Isso garante que o AAMM da chave de acesso bate com o `dhEmi` mesmo em cruzamentos de meia-noite ou virada de mes entre fusos.
+
+## Validacao XSD
+
+```toml
+[dev-dependencies]
+fiscal-xsd = { version = "0.1.0", features = ["mdfe"] }
+```
+
+```rust
+use fiscal_xsd::schemas;
+
+let xml    = build_mdfe_xml(&data)?;
+let signed = sign_mdfe_xml(&xml, &pk, &cert)?;
+schemas::mdfe().validate(&signed).unwrap();
+```
+
+<Cards>
+  <Card title="fiscal-xsd" href="/docs/fiscal-xsd" />
+  <Card title="fiscal-cte" href="/docs/fiscal-cte" />
+  <Card title="Assinatura XML-DSig" href="/docs/certificate-signing" />
+</Cards>

@@ -1,0 +1,132 @@
+---
+title: "fiscal-nfse: NFS-e Nacional (DPS 1.01)"
+description: Crate para construcao e assinatura da NFS-e Nacional — Declaracao de Prestacao de Servico (DPS 1.01) e eventos, padrao SEFIN/RTC.
+---
+
+O **fiscal-nfse** implementa a NFS-e Nacional, o padrao unificado federal de nota fiscal de servicos definido pelo Comite Gestor da NFS-e (SEFIN). Nao confunda com as NFS-e municipais (ABRASF, SP etc.) — essas ficam no [`fiscal-nfse-mun`](/docs/fiscal-nfse-mun).
+
+```toml
+[dependencies]
+fiscal-nfse  = { version = "0.1.0" }
+fiscal-crypto = { version = "0.3.1" }
+```
+
+## DPS — Declaracao de Prestacao de Servico
+
+A DPS e o documento principal da NFS-e Nacional. Apos autorizada pela SEFAZ, o sistema retorna a NFS-e propriamente dita.
+
+### Fluxo de emissao
+
+<Mermaid chart={`
+flowchart LR
+    dados["DpsBuildData"]
+    build["build_dps_xml()"]
+    xml["DPS nao-assinada"]
+    cert["load_certificate()"]
+    sign["sign_dps_xml()"]
+    signed["DPS assinada"]
+    sefaz["SEFAZ\n(NFS-e Nacional)"]
+    nfse["NFS-e retornada"]
+
+    dados --> build --> xml
+    cert --> sign
+    xml --> sign --> signed --> sefaz --> nfse
+`} />
+
+```rust
+use fiscal_nfse::{build_dps_xml, types::DpsBuildData};
+use fiscal_crypto::certificate::{load_certificate, sign_dps_xml};
+
+let data   = DpsBuildData { /* ... */ };
+let xml    = build_dps_xml(&data)?;
+let cert   = load_certificate(&pfx_bytes, "senha")?;
+let signed = sign_dps_xml(&xml, &cert.private_key, &cert.certificate)?;
+```
+
+### Tipos principais de `DpsBuildData`
+
+| Campo | Descricao |
+|-------|-----------|
+| `dps_id` | Id do elemento infDPS (ex.: `"DPS1..."`) |
+| `n_dps` | Numero da DPS |
+| `dh_emi` | Data/hora de emissao |
+| `competencia` | Mes de competencia (`YYYY-MM`) |
+| `prest` | Prestador (CNPJ/CPF, IM, endereco) |
+| `toma` | Tomador (CNPJ/CPF, nome, endereco) |
+| `serv` | Servico (cServ, xServ, valores, tributos) |
+| `valores` | Valores da DPS (vServPrest, vDeducao, vLiq) |
+
+## Cancelamento de NFS-e
+
+Para cancelar uma NFS-e Nacional ja autorizada, use `build_nfse_cancelamento`:
+
+```rust
+use fiscal_nfse::build_nfse_cancelamento;
+use fiscal_crypto::certificate::sign_nfse_evento_xml;
+
+let evento = build_nfse_cancelamento(
+    &chave_nfse,   // 44 digitos
+    "2",           // xMotivo: "2" = Erro na emissao
+)?;
+let signed = sign_nfse_evento_xml(&evento, &pk, &cert)?;
+```
+
+## Assinatura: SHA-256 e aceito
+
+<Callout type="info">
+Ao contrario da NF-e, CT-e e MDF-e, a NFS-e Nacional aceita **SHA-256** para assinatura XML. O padrao RTC especifica SHA-256 como algoritmo preferencial para certificados ICP-Brasil v5 (emitidos apos 2021).
+</Callout>
+
+```rust
+use fiscal_crypto::certificate::{sign_dps_xml_with_algorithm, SignatureAlgorithm};
+
+// SHA-256 (recomendado para certificados novos)
+let signed = sign_dps_xml_with_algorithm(
+    &xml, &pk, &cert,
+    SignatureAlgorithm::Sha256
+)?;
+```
+
+A assinatura referencia o elemento `<infDPS Id="...">` e insere `<Signature>` como filho de `<DPS>`.
+
+## Eventos
+
+Alem do cancelamento, o schema da NFS-e Nacional define outros eventos via `pedRegEvento_v1.01.xsd`. A funcao `sign_nfse_evento_xml` assina qualquer evento (nao apenas cancelamento):
+
+```rust
+use fiscal_crypto::certificate::sign_nfse_evento_xml;
+
+// xml pode ser qualquer pedRegEvento
+let signed = sign_nfse_evento_xml(&xml, &pk, &cert)?;
+```
+
+## Diferenca entre NFS-e Nacional e Municipal
+
+| | NFS-e Nacional (`fiscal-nfse`) | NFS-e Municipal (`fiscal-nfse-mun`) |
+|--|-------------------------------|--------------------------------------|
+| Padrao | SEFIN/RTC (federal) | ABRASF 2.x ou sistema proprio (SP, etc.) |
+| Schema | DPS_v1.01.xsd | nfse.xsd (ABRASF) / PedidoEnvioLoteRPS |
+| Assinatura | XMLDSig em `<infDPS>` | XMLDSig em `<InfDeclaracaoPrestacaoServico>` (ABRASF) ou URI="" (SP) |
+| Municipios | Todos (adesao gradual) | Apenas os que ainda operam sistema proprio |
+| SHA-256 | Sim | Nao (SHA-1 obrigatorio) |
+
+## Validacao XSD
+
+```toml
+[dev-dependencies]
+fiscal-xsd = { version = "0.1.0", features = ["nfse"] }
+```
+
+```rust
+let signed = sign_dps_xml(&xml, &pk, &cert)?;
+fiscal_xsd::schemas::dps().validate(&signed).unwrap();
+
+let signed_ev = sign_nfse_evento_xml(&ev_xml, &pk, &cert)?;
+fiscal_xsd::schemas::nfse_evento().validate(&signed_ev).unwrap();
+```
+
+<Cards>
+  <Card title="fiscal-nfse-mun" href="/docs/fiscal-nfse-mun" />
+  <Card title="fiscal-xsd" href="/docs/fiscal-xsd" />
+  <Card title="Assinatura XML-DSig" href="/docs/certificate-signing" />
+</Cards>
