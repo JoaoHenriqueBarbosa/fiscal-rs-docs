@@ -45,6 +45,64 @@ description: Visao geral de todos os modulos publicos do fiscal-rs
 | `response_parsers` | Parsers de resposta SOAP/XML |
 | `client` | Client HTTP async com mTLS (feature `client`) |
 
+## fiscal-xsd
+
+Validacao XSD opt-in — schemas SEFAZ embutidos em tempo de compilacao via `include_bytes!`.
+
+| Feature / funcao | Schema | Documento |
+|-----------------|--------|-----------|
+| `nfe` / `schemas::nfe_lote()` | `enviNFe_v4.00.xsd` | NF-e / NFC-e 4.00 |
+| `mdfe` / `schemas::mdfe()` | `mdfe_v3.00.xsd` | MDF-e 3.00 |
+| `cte` / `schemas::cte()`, `cteos()`, `gtve()` | `cte_v4.00.xsd` | CT-e 4.00, CT-e OS, GTV-e |
+| `bpe` / `schemas::bpe()` | `bpe_v1.00.xsd` | BP-e 1.00 |
+| `nfse` / `schemas::dps()`, `nfse_evento()` | `DPS_v1.01.xsd` | NFS-e Nacional (DPS) |
+| `abrasf` / `schemas::abrasf_gerar_nfse()` | `nfse.xsd` | NFS-e ABRASF 2.03 |
+| `saopaulo` / `schemas::sp_lote_rps()`, `sp_lote_rps_v2()` | `PedidoEnvioLoteRPS_v01/v02.xsd` | NFS-e SP |
+
+## fiscal-mdfe
+
+Builder e assinatura para o MDF-e (Manifesto Eletronico de Documentos Fiscais, modelo 58).
+
+| Funcao | Descricao |
+|--------|-----------|
+| `build_mdfe_xml` | Gera XML nao-assinado a partir de `MdfeBuildData` |
+| `generate_mdfe_access_key` | Calcula a chave de acesso de 44 digitos |
+| `signing::sign_mdfe_xml` | Re-exporta `fiscal_crypto::certificate::sign_mdfe_xml` |
+
+## fiscal-cte
+
+Builder e assinatura para CT-e (57), CT-e OS (67), GTV-e e BP-e (63), leiaute 4.00.
+
+| Funcao | Descricao |
+|--------|-----------|
+| `build_cte_xml` | CT-e modal rodoviario (e outros) |
+| `build_cteos_xml` | CT-e Outros Servicos |
+| `build_gtve_xml` | Guia de Transporte de Valores |
+| `build_bpe_xml` | Bilhete de Passagem Eletronico |
+| `signing::*` | Re-exporta `sign_cte_xml`, `sign_cteos_xml`, `sign_gtve_xml`, `sign_bpe_xml` |
+
+## fiscal-nfse
+
+Builder e assinatura para NFS-e Nacional — DPS 1.01 (SEFIN/RTC).
+
+| Funcao | Descricao |
+|--------|-----------|
+| `build_dps_xml` | Gera DPS nao-assinada a partir de `DpsBuildData` |
+| `build_nfse_cancelamento` | Gera evento de cancelamento |
+| Assinatura via `fiscal_crypto` | `sign_dps_xml`, `sign_nfse_evento_xml` |
+
+## fiscal-nfse-mun
+
+NFS-e municipal com registro de provedores por codigo IBGE.
+
+| Modulo | Descricao |
+|--------|-----------|
+| `registry` | `provider_for(c_mun)` → `Option<Box<dyn Provider>>` |
+| `abrasf` | Builder + transporte ABRASF 2.x (`GerarNfseEnvio`) |
+| `saopaulo` | Builder + transporte PMSP v01/v02 (RPS + XMLDSig URI="") |
+| `model` | `EmitInput`, `Rps`, `Servico`, `Tomador`, `EmitOutput` |
+| `provider` | `ProviderCtx` (pfx, senha, cnpj, im, ambiente, versao) |
+
 ## Referencia completa
 
 A documentacao completa da API com todos os tipos, funcoes e exemplos esta disponivel no [docs.rs/fiscal](https://docs.rs/fiscal).

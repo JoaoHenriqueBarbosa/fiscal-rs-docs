@@ -1,0 +1,103 @@
+---
+title: "fiscal-xsd: Validacao XSD em Tempo de Compilacao"
+description: Crate de validacao XSD opt-in para documentos fiscais brasileiros. Schemas embutidos em tempo de compilacao, validacao em sub-milissegundo.
+---
+
+O **fiscal-xsd** resolve um problema classico no desenvolvimento fiscal: como garantir que o XML gerado e valido contra o schema oficial da SEFAZ *antes* de enviar para producao?
+
+A abordagem do crate e simples e eficiente — os arquivos `.xsd` oficiais sao embutidos no binario em tempo de compilacao via `include_bytes!`. Nao ha leitura de arquivo em runtime, nao ha dependencia de path externo, e o schema e compilado uma unica vez por thread (via `OnceLock`).
+
+```toml
+[dependencies]
+fiscal-xsd = { version = "0.1.0", features = ["nfe", "mdfe"] }
+```
+
+## Features disponiveis
+
+Cada modelo fiscal e uma feature separada — voce so paga (em tamanho de binario) pelos schemas que realmente usa.
+
+| Feature | Cobre | Funcao exposta |
+|---------|-------|----------------|
+| `nfe` | NF-e/NFC-e 4.00 | `schemas::nfe_lote()` |
+| `mdfe` | MDF-e 3.00 (todos os modais) | `schemas::mdfe()` |
+| `cte` | CT-e 4.00, CT-e OS, GTV-e | `schemas::cte()`, `schemas::cteos()`, `schemas::gtve()` |
+| `bpe` | BP-e 1.00 | `schemas::bpe()` |
+| `nfse` | NFS-e Nacional 1.01 (DPS + evento) | `schemas::dps()`, `schemas::nfse_evento()` |
+| `abrasf` | NFS-e ABRASF 2.03 (GerarNfseEnvio) | `schemas::abrasf_gerar_nfse()` |
+| `saopaulo` | NFS-e SP v01 e v02 | `schemas::sp_lote_rps()`, `schemas::sp_lote_rps_v2()` |
+
+## Como usar
+
+```rust
+use fiscal_xsd::schemas;
+
+// schema e compilado uma vez por thread (OnceLock interno)
+let schema = schemas::nfe_lote();
+
+let xml = build_nfe_xml(&data)?;
+schema.validate(&xml)?; // Ok(()) ou Err com mensagem do libxml2
+```
+
+O metodo `validate` recebe `&str` e retorna `Result<(), String>` com a mensagem de erro do libxml2 quando o XML nao e valido.
+
+## Anatomia de um bundle XSD
+
+Cada modelo agrupa varios arquivos `.xsd` interdependentes. O `XsdSchema` resolve os imports internos (ex.: `cte_v4.00.xsd` importa `cteTiposBasico_v4.00.xsd`) sem acesso ao filesystem:
+
+```
+schemas/cte_400/
+  cte_v4.00.xsd            <- root (ponto de entrada)
+  cteTiposBasico_v4.00.xsd
+  tiposGeralCTe_v4.00.xsd
+  cteOS_v4.00.xsd
+  GTVe_v4.00.xsd
+  xmldsig-core-schema_v1.01.xsd
+```
+
+O construtor recebe a lista de arquivos e o root:
+
+```rust
+static SCHEMA: XsdSchema = XsdSchema::new(
+    "cte_400",
+    FILES,          // &[(&str, &[u8])] com todos os XSDs
+    "cte_v4.00.xsd" // arquivo root para iniciar a validacao
+);
+```
+
+## Uso em testes de integracao
+
+O padrao recomendado e usar o `fiscal-xsd` como `dev-dependency` nos testes de roundtrip — build → sign → validate:
+
+```toml
+[dev-dependencies]
+fiscal-xsd = { path = "../fiscal-xsd", version = "0.1.0", features = ["cte"] }
+```
+
+```rust
+#[test]
+fn roundtrip_cte() {
+    let xml = build_cte_xml(&data).unwrap();
+    let signed = sign_cte_xml(&xml, &pk, &cert).unwrap();
+    fiscal_xsd::schemas::cte().validate(&signed).unwrap();
+}
+```
+
+<Callout type="info">
+O `fiscal-xsd` usa `libxml` internamente (binding para libxml2). Em ambientes Linux, certifique-se de ter `libxml2-dev` instalado. No CI do fiscal-rs, o passo `Install system dependencies` ja cuida disso.
+</Callout>
+
+## Compile-time vs. runtime
+
+| | fiscal-xsd | Alternativa tipica |
+|--|--|----|
+| Leitura de XSD | Compilacao (`include_bytes!`) | Runtime (filesystem) |
+| Compilacao do schema | Uma vez por thread (`OnceLock`) | A cada validacao |
+| Overhead em producao | Zero (apenas `validate` puro) | Leitura de arquivo + parse |
+| Tamanho do binario | Cresce por feature ativada | Dependente do path |
+| Deploy | Schema vai junto no binario | Requer arquivos XSD no servidor |
+
+<Cards>
+  <Card title="fiscal-cte" href="/docs/fiscal-cte" />
+  <Card title="fiscal-mdfe" href="/docs/fiscal-mdfe" />
+  <Card title="fiscal-nfse" href="/docs/fiscal-nfse" />
+</Cards>

@@ -1,0 +1,193 @@
+---
+title: "fiscal-nfse-mun: NFS-e Municipal"
+description: Crate para emissao de NFS-e municipal nos padroes ABRASF 2.x, Sao Paulo (PMSP) e Simpliss, com registro de provedores por codigo de municipio IBGE.
+---
+
+O **fiscal-nfse-mun** cobre os sistemas de NFS-e que ainda operam em padrao municipal — anterior a adocao da NFS-e Nacional federal. Os tres provedores suportados cobrem a grande maioria das cidades brasileiras por volume de notas.
+
+```toml
+[dependencies]
+fiscal-nfse-mun = { version = "0.1.0" }
+fiscal-nfse-mun = { version = "0.1.0", features = ["client"] } # + HTTP async
+```
+
+A feature `client` ativa o transporte SOAP via `reqwest` (mTLS). Sem ela, o crate so expoe os builders de XML e assinatura (util para integracoes proprias).
+
+## Provedores suportados
+
+| Provedor | Municipios tipicos | Schema |
+|----------|-------------------|--------|
+| ABRASF 2.x | Curitiba, Belo Horizonte, Salvador, Porto Alegre, Fortaleza... | `nfse.xsd` (ABRASF) |
+| Sao Paulo (PMSP) | Sao Paulo (capital) | `PedidoEnvioLoteRPS_v01/v02.xsd` |
+| Simpliss | Municipios com sistema Betha/Simpliss | Compativel ABRASF |
+
+## Registro de provedores
+
+Cada municipio e mapeado ao seu provedor via codigo IBGE:
+
+```rust
+use fiscal_nfse_mun::registry::provider_for;
+
+let ctx = ProviderCtx { /* pfx, senha, cnpj, im, ... */ };
+
+match provider_for("3550308") { // Sao Paulo
+    Some(provider) => provider.emit(&input, &ctx).await?,
+    None => Err(MunError::MunicipioNaoSuportado("3550308".into()))?,
+}
+```
+
+## Modelo de dados compartilhado
+
+Todos os provedores recebem o mesmo `EmitInput`, eliminando a necessidade de adaptar dados por municipio:
+
+```rust
+let input = EmitInput {
+    emitente: Emitente {
+        cnpj: "18885949000181".into(),
+        im: Some("12345678".into()),           // Inscricao Municipal
+        razao_social: "Minha Empresa Ltda".into(),
+        c_mun: "3550308".into(),               // IBGE
+        uf: "SP".into(),
+        optante_simples: true,
+        endereco: None,
+    },
+    rps: Rps {
+        numero: 42,
+        serie: "A1".into(),
+        tipo: 1,
+        data_emissao: "2026-07-01T10:00:00-03:00".into(),
+        tomador: Tomador {
+            doc: Some("11222333000181".into()),
+            razao_social: Some("Cliente Ltda".into()),
+            email: Some("cliente@example.com".into()),
+            ..Default::default()
+        },
+        servico: Servico {
+            valor_centavos: 50000,              // R$ 500,00
+            valor_deducoes_centavos: 0,
+            aliquota_iss: Some("2.00".into()),
+            iss_retido: false,
+            item_lista_servico: "1.01".into(),
+            cod_tributacao_municipio: Some("02916".into()),
+            discriminacao: "Desenvolvimento de software".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    },
+};
+```
+
+## ABRASF 2.x
+
+O padrao ABRASF usa XMLDSig envelopado em `<InfDeclaracaoPrestacaoServico Id="rps{numero}{serie}">`. A `<Signature>` e inserida dentro de `<Rps>` (envelope externo), nao dentro do `<InfDeclaracaoPrestacaoServico>`.
+
+```rust
+// com feature "client"
+use fiscal_nfse_mun::abrasf;
+
+let output = abrasf::emit(
+    &input,
+    &ctx,
+    "https://nfse.curitiba.pr.gov.br/...",  // endpoint SOAP
+    "http://nfse.abrasf.org.br/GerarNfse",  // SOAPAction
+).await?;
+```
+
+Sem feature `client`, use os builders diretamente:
+
+```rust
+use fiscal_nfse_mun::abrasf::{build_gerar_nfse};
+use fiscal_crypto::certificate::{load_certificate, sign_abrasf_xml};
+
+let xml    = build_gerar_nfse(&input)?;
+let cert   = load_certificate(&pfx_bytes, "senha")?;
+let signed = sign_abrasf_xml(&xml, &cert.private_key, &cert.certificate)?;
+```
+
+## Sao Paulo (PMSP)
+
+O sistema da Prefeitura de Sao Paulo tem dois mecanismos de assinatura distintos, empilhados:
+
+<Mermaid chart={`
+flowchart TB
+    A["Campos do RPS\n(IM + serie + numero + data + ...)"]
+    B["String de assinatura\n(87-101 chars, formato fixo)"]
+    C["RSA-SHA1 da string\nbase64 → campo Assinatura no XML"]
+    D["Lote XML montado\n(PedidoEnvioLoteRPS)"]
+    E["XMLDSig URI= do lote inteiro\nSignature como ultimo filho"]
+    F["SOAP envelope → PMSP"]
+
+    A --> B --> C --> D --> E --> F
+`} />
+
+**Assinatura 1** (campo `<Assinatura>` no RPS): RSA-SHA1 sobre uma string de campos concatenados com larguras fixas. Qualquer diferenca na string — um espaco extra na serie, zeros faltando no numero — gera rejeicao com `cStat 1057`.
+
+**Assinatura 2** (XMLDSig do lote): assinatura padrao XMLDSig com `Reference URI=""` (documento inteiro), em vez do `URI="#id"` usado no NF-e.
+
+<Callout type="warn">
+O SP usa `xmlns` default na raiz (`xmlns="http://www.prefeitura.sp.gov.br/nfe"`) e `xmlns=""` nos elementos filhos. Isso e intencional — sem o reset de namespace nos filhos, o C14N do XMLDSig captura o namespace nos elementos internos e a verificacao falha no servidor da PMSP.
+</Callout>
+
+```rust
+// com feature "client"
+use fiscal_nfse_mun::saopaulo;
+
+let output = saopaulo::emit(
+    &input,
+    &ctx,   // ctx.versao = 1 ou 2 (v2 = reforma SP)
+    "https://nfe.prefeitura.sp.gov.br/ws/lotenfe.asmx",
+).await?;
+```
+
+### SP v2 (reforma 2026)
+
+A versao 2 do sistema SP expande o campo Inscricao Municipal de 8 para 12 digitos e adiciona campos IBS/CBS. O `ctx.versao >= 2` ativa o builder e a string de assinatura correspondentes automaticamente.
+
+## Cancelamento e consulta
+
+```rust
+// Cancelar NFS-e SP
+let out = saopaulo::cancelar(&CancelInput {
+    numero_nfse: "12345".into(),
+    codigo_verificacao: Some("ABC123".into()),
+}, &ctx, endpoint).await?;
+
+// Consultar NFS-e SP
+let out = saopaulo::consultar("12345", "ABC123", &ctx, endpoint).await?;
+```
+
+## Output padronizado
+
+Todos os provedores retornam `EmitOutput`:
+
+```rust
+pub struct EmitOutput {
+    pub status: Status,       // Autorizado | Rejeitado | Cancelado | Erro
+    pub numero_nfse: Option<String>,
+    pub codigo_verificacao: Option<String>,
+    pub xml: Option<String>,  // XML da NFS-e retornada (ou lote enviado em erro)
+    pub mensagem: Option<String>,
+}
+```
+
+## Validacao XSD
+
+```toml
+[dev-dependencies]
+fiscal-xsd = { version = "0.1.0", features = ["abrasf", "saopaulo"] }
+```
+
+```rust
+use fiscal_nfse_mun::abrasf::build_gerar_nfse;
+use fiscal_crypto::certificate::{load_certificate, sign_abrasf_xml};
+
+let xml    = build_gerar_nfse(&input)?;
+let signed = sign_abrasf_xml(&xml, &pk, &cert)?;
+fiscal_xsd::schemas::abrasf_gerar_nfse().validate(&signed).unwrap();
+```
+
+<Cards>
+  <Card title="fiscal-nfse (Nacional)" href="/docs/fiscal-nfse" />
+  <Card title="fiscal-xsd" href="/docs/fiscal-xsd" />
+  <Card title="Assinatura XML-DSig" href="/docs/certificate-signing" />
+</Cards>
