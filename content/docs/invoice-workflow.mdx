@@ -51,6 +51,7 @@ sequenceDiagram
     Core-->>App: InvoiceBuilder‹Signed›
 
     App->>Sefaz: SefazClient::new(&pfx, "senha")
+    Note over App,Sefaz: Carrega certificado via<br/>load_certificate internamente<br/>Assina eventos automaticamente
     Sefaz-->>App: SefazClient (mTLS configurado)
     App->>Sefaz: client.authorize("SP", env, signed_xml, lot_id)
     Sefaz->>Sefaz: build_autorizacao_request() + SOAP envelope
@@ -249,7 +250,11 @@ O closure dentro de `sign_with` retorna `Result<String, FiscalError>`. Erros pos
 
 ## Etapa 4 — Transmitir ao SEFAZ
 
-O `SefazClient` gerencia a conexão mTLS com os webservices SEFAZ. A identidade do certificado é configurada na construção do client.
+O `SefazClient` gerencia a conexão mTLS com os webservices SEFAZ. A identidade do certificado é configurada na construção do client, que carrega o PFX internamente via `fiscal_crypto::load_certificate`.
+
+<Callout type="info">
+O `SefazClient` agora **assina automaticamente** os eventos XML (cancelamento, CC-e, manifestação, EPEC, etc.) antes de transmiti-los. Antes da migração RustCrypto (PR #51), eventos eram enviados sem assinatura, causando rejeição em produção.
+</Callout>
 
 ### Criar o client
 

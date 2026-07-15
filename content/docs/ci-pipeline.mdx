@@ -91,7 +91,7 @@ Todos os jobs utilizam `actions/cache@v5` para cachear o registry do Cargo e o d
 
 ### Dependência de Sistema
 
-Todos os jobs instalam `libssl-dev` e `pkg-config` via apt, necessários para a compilação do crate `openssl-sys` (utilizado para assinatura digital de XML).
+O `fiscal-rs` é **100% Rust** sem dependências nativas — o CI não precisa instalar OpenSSL, `libssl-dev` ou `pkg-config`.
 
 ---
 

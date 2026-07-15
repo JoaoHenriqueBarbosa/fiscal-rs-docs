@@ -1,9 +1,9 @@
 ---
 title: Certificados digitais
-description: Carregamento de certificados A1 e assinatura XML
+description: Carregamento de certificados A1 e assinatura XML com RustCrypto (sem OpenSSL)
 ---
 
-O modulo `fiscal::certificate` fornece funcoes para carregar certificados digitais A1 (PFX/PKCS#12) e assinar documentos XML conforme o padrao da NF-e.
+O modulo `fiscal::certificate` fornece funcoes para carregar certificados digitais A1 (PFX/PKCS#12) e assinar documentos XML conforme o padrao da NF-e, usando criptografia RustCrypto 100% Rust — sem dependência de OpenSSL.
 
 ## Carregando um certificado
 
@@ -38,7 +38,7 @@ let signed = sign_xml(xml, &cert_data.private_key, &cert_data.certificate)?;
 
 A assinatura segue o padrao XML-DSig com:
 - Canonicalizacao C14N
-- Algoritmo RSA-SHA1
+- Algoritmo RSA-SHA1 (PKCS#1 v1.5 via crate `rsa`)
 - Transform enveloped-signature
 - Referencia ao elemento `infNFe`
 
@@ -63,6 +63,10 @@ let signed_invoice = invoice.sign_with(|xml| {
 
 let xml_final = signed_invoice.signed_xml();
 ```
+
+## Verificacao MAC
+
+Ao carregar o PFX, o `load_certificate` agora recalcula o HMAC antes da decriptacao. Senha incorreta retorna erro explicito `"Failed to parse PFX (wrong password?)"` — sem panic.
 
 ## Tipos de certificado
 

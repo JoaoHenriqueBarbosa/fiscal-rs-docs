@@ -12,7 +12,7 @@ O `fiscal-rs` é uma biblioteca Rust para emissão de documentos fiscais eletrô
 | Crate | Descrição | Dependências externas principais |
 |-------|-----------|----------------------------------|
 | `fiscal-core` | Tipos de domínio, cálculo de impostos, construção de XML, conversão TXT→XML | `quick-xml`, `serde`, `chrono`, `sha1`, `thiserror` |
-| `fiscal-crypto` | Carregamento de certificado digital (PFX) e assinatura XML-DSig | `openssl`, `base64`, `sha1`, `chrono` |
+| `fiscal-crypto` | Carregamento de certificado digital (PFX) e assinatura XML-DSig | `pkcs12`, `rsa`, `sha1`, `base64`, `chrono` |
 | `fiscal-sefaz` | URLs SEFAZ, builders de requisição SOAP, parsers de resposta, client HTTP async | `chrono`, `reqwest` (feature-gated) |
 | `fiscal` | **Fachada** — re-exporta todos os crates acima sob `use fiscal::...` | `fiscal-core`, `fiscal-crypto`, `fiscal-sefaz` |
 
@@ -47,7 +47,7 @@ pub mod sefaz { pub use fiscal_sefaz::... }"]
         sefaz_layer["fiscal-sefaz
 URLs, SOAP, client HTTP async (reqwest + mTLS)"]
         crypto_layer["fiscal-crypto
-OpenSSL, carregamento PFX, assinatura XML-DSig"]
+RustCrypto (pkcs12, rsa, sha1), carregamento PFX, assinatura XML-DSig"]
     end
 
     subgraph fcore["Functional Core — lógica pura, sem I/O"]
@@ -88,10 +88,10 @@ Exemplos concretos:
 
 A casca imperativa encapsula todos os efeitos colaterais:
 
-- **`fiscal-crypto`**: chama OpenSSL para extrair chaves de certificados `.pfx` e assinar XML.
+- **`fiscal-crypto`**: usa RustCrypto (crates `pkcs12`, `rsa`, `sha1`) para extrair chaves de certificados `.pfx` e assinar XML.
 - **`fiscal-sefaz`**: faz requisições HTTP async via `reqwest` com mTLS para os webservices da SEFAZ.
 
-Essa separação permite que o core seja compilado e testado sem OpenSSL instalado e sem acesso à rede.
+Essa separação permite que o core seja compilado e testado sem dependências de criptografia e sem acesso à rede.
 
 ### Traits Selados
 
@@ -113,7 +113,7 @@ A decisão de separar o projeto em múltiplos crates dentro de um workspace traz
 
 ### 1. Publicação Independente
 
-Cada crate pode ser publicado separadamente no [crates.io](https://crates.io). Um projeto que só precisa gerar XML fiscal pode depender de `fiscal-core` sem arrastar OpenSSL ou `reqwest` como dependências transitivas.
+Cada crate pode ser publicado separadamente no [crates.io](https://crates.io). Um projeto que só precisa gerar XML fiscal pode depender de `fiscal-core` sem arrastar dependências de criptografia ou `reqwest` como dependências transitivas.
 
 ### 2. Compilação Mais Rápida
 
@@ -121,7 +121,7 @@ O Cargo compila crates em paralelo quando não há dependência entre eles. Como
 
 ### 3. Alvos FFI e WebAssembly
 
-O `fiscal-core` não depende de OpenSSL nem de I/O de rede, tornando-o ideal para:
+O `fiscal-core` não tem dependências de criptografia nem de I/O de rede, tornando-o ideal para:
 - **FFI (C/C++/Python/Node.js)**: expor funções de cálculo de impostos e geração de XML via `cbindgen` ou `pyo3` sem arrastar uma pilha TLS.
 - **WebAssembly**: compilar para `wasm32-unknown-unknown` para uso em navegadores ou edge functions.
 

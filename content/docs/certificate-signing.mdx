@@ -81,8 +81,6 @@ sequenceDiagram
     participant C14N as Canonicalização
     participant SHA as SHA-1
     participant RSA as RSA-SHA1
-    participant PEM as OpenSSL (PEM)
-
     App->>Sign: xml, private_key, certificate
 
     Note over Sign: Passo 1-2: Localizar elemento assinado
@@ -106,9 +104,8 @@ sequenceDiagram
     C14N-->>Sign: SignedInfo canônico
 
     Note over Sign,RSA: Passo 8: Assinar com RSA-SHA1
-    Sign->>PEM: parse private_key PEM
-    PEM-->>RSA: PKey
-    Sign->>RSA: sign(SignedInfo canônico)
+    Sign->>RSA: parse private_key via RsaPrivateKey::from_pkcs8_pem
+    RSA->>RSA: Pkcs1v15Sign::&lt;Sha1&gt;::sign(...)
     RSA-->>Sign: SignatureValue (Base64)
 
     Note over Sign: Passo 9-11: Montar e inserir Signature
@@ -187,15 +184,18 @@ O próprio `<SignedInfo>` é canonicalizado antes de ser assinado. Isso garante 
 
 #### 8. Assinatura RSA-SHA1
 
-A chave privada PEM é parseada via OpenSSL, e o `<SignedInfo>` canônico é assinado com RSA-SHA1:
+A chave privada PEM é parseada com o crate `rsa` (RustCrypto), e o `<SignedInfo>` canônico é assinado com RSA-SHA1 via PKCS#1 v1.5:
 
 ```rust
-let pkey = PKey::private_key_from_pem(private_key_pem.as_bytes())?;
-let mut signer = Signer::new(MessageDigest::sha1(), &pkey)?;
-signer.update(canonical_signed_info.as_bytes())?;
-let signature_bytes = signer.sign_to_vec()?;
+let rsa_private = rsa::RsaPrivateKey::from_pkcs8_pem(&private_key_pem)?;
+let signature_bytes = rsa_private.sign(
+    rsa::Pkcs1v15Sign::new::<sha1::Sha1>(),
+    canonical_signed_info.as_bytes(),
+)?;
 let signature_value = BASE64.encode(&signature_bytes);
 ```
+
+A assinatura é determinística (PKCS#1 v1.5), produzindo saída byte-idêntica ao OpenSSL, garantindo compatibilidade retroativa com verificadores existentes.
 
 O resultado é o `<SignatureValue>` codificado em Base64.
 
@@ -375,6 +375,61 @@ match sign_xml(&xml, &key, &cert) {
     }
     Err(other) => eprintln!("Erro inesperado: {other}"),
 }
+```
+
+## Implementação interna (RustCrypto)
+
+O `fiscal-crypto` agora é 100% Rust, sem dependência de OpenSSL. A migração substituiu o parser ASN.1 manual e a assinatura via `openssl-sys` por crates do ecossistema RustCrypto:
+
+| Funcionalidade | Antes (OpenSSL) | Agora (RustCrypto) |
+|---|---|---|
+| Parsing PFX/PKCS#12 | Parser ASN.1 manual (~590 linhas) | `pkcs12` + `pkcs5` |
+| KDF PBES1 | Implementação própria | `pkcs12::kdf::derive_key_utf8::<sha1::Sha1>` |
+| Assinatura RSA-SHA1 | `PKey` + `Signer` + `MessageDigest` | `rsa::RsaPrivateKey` + `Pkcs1v15Sign` |
+| HMAC (MAC) | Não verificado | HMAC SHA-256 / SHA-1 antes da decriptação |
+| BER indefinite-length | Parser manual com `len_byte == 0x80` | Delegado ao `pkcs12` crate |
+
+### Verificação MAC
+
+Antes de decriptar o PFX, o `fiscal-crypto` agora **recalcula o HMAC** e compara com o valor armazenado. Isso detecta senha incorreta antes de qualquer tentativa de decriptação:
+
+```rust
+// Internamente (simplificado):
+let pfx = Pkcs12::from_der(pfx_bytes)?;
+pfx.parse2(passphrase)?; // valida MAC + extrai chaves
+// Se a senha estiver errada, retorna erro imediatamente
+// sem tentar decriptar com chave errada
+```
+
+Isso garante erro explícito `"Failed to parse PFX (wrong password?)"` em vez de panic de slice indexing (como ocorria com 3DES no parser antigo).
+
+### BER indefinite-length
+
+O formato PFX usa BER (Basic Encoding Rules) que suporta comprimento indefinido (`0x80`). O parser manual antigo tratava `len_byte == 0x80` como comprimento zero, resultando em parse silenciosamente incorreto. Agora o `pkcs12` crate gerencia BER corretamente, rejeitando PFX malformados com erro descritivo.
+
+### `ensure_modern_pfx`
+
+A função `ensure_modern_pfx` foi de no-op (não fazia nada) para validação real que verifica se o PFX usa um esquema de criptografia moderno (PKCS#12 v1.1+). Recomenda-se chamá-la após `load_certificate` para certificados que precisam ser reexportados para uso em outras ferramentas.
+
+## Assinatura automática de eventos no SefazClient
+
+O `SefazClient::new` agora carrega o certificado internamente via `fiscal_crypto::load_certificate` e **assina automaticamente** os eventos XML antes de transmiti-los para a SEFAZ:
+
+- Cancelamento (`cancel`)
+- Carta de Correção (`cce`)
+- Manifestação do Destinatário (`manifest`)
+- EPEC, prorrogação, conciliação, entrega, RTC
+
+Cada `<evento>` individual em lotes também é assinado separadamente. Antes da PR #51, os eventos eram enviados sem assinatura no `<infEvento>`, causando rejeição em produção.
+
+```rust
+use fiscal_sefaz::client::SefazClient;
+
+let pfx = std::fs::read("certificado.pfx")?;
+let client = SefazClient::new(&pfx, "senha")?;
+
+// Eventos sao assinados automaticamente antes do envio
+let response = client.cancel(uf, env, &access_key, &protocol, "justificativa", &cnpj).await?;
 ```
 
 ## Notas de segurança
