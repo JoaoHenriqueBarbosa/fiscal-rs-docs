@@ -74,7 +74,7 @@ Núcleo funcional puro — sem I/O, sem `unsafe`, sem dependência de OpenSSL ou
 
 ### `crates/fiscal-crypto/`
 
-Casca imperativa para criptografia — depende de OpenSSL.
+Casca imperativa para criptografia — RustCrypto puro (crates `pkcs12`, `rsa`, `sha1`).
 
 | Arquivo | Módulo | Descrição |
 |---------|--------|-----------|
@@ -92,7 +92,7 @@ Casca imperativa para comunicação SEFAZ — depende de `reqwest` (feature-gate
 | `services.rs` | `services` | Metadados SOAP: método, operação, versão por serviço |
 | `request_builders.rs` | `request_builders` | Builders de envelope SOAP para cada operação |
 | `response_parsers.rs` | `response_parsers` | Parsing de resposta XML e structs tipadas de resultado |
-| `client.rs` | `client` | Client HTTP async com mTLS via `reqwest` + `native-tls` |
+| `client.rs` | `client` | Client HTTP async com mTLS via `reqwest` |
 | `soap.rs` | (privado) | Utilitários internos de envelope SOAP |
 
 ## Testes

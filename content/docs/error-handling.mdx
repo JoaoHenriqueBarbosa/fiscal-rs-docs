@@ -115,7 +115,7 @@ O operador `?` propaga o erro para o chamador sem necessidade de conversão manu
 
 ## Propagação entre camadas
 
-O `FiscalError` flui naturalmente das camadas internas para o código do usuário. Cada crate adiciona seus próprios erros usando `map_err` para converter erros de bibliotecas externas (OpenSSL, reqwest, etc.) em variantes de `FiscalError`.
+O `FiscalError` flui naturalmente das camadas internas para o código do usuário. Cada crate adiciona seus próprios erros usando `map_err` para converter erros de bibliotecas externas (RustCrypto, reqwest, etc.) em variantes de `FiscalError`.
 
 <Mermaid chart={`
 sequenceDiagram

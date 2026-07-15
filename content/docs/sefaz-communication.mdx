@@ -99,12 +99,18 @@ application/soap+xml;charset=utf-8;action="http://www.portalfiscal.inf.br/nfe/ws
 
 O `SefazClient` utiliza `reqwest` com identidade PKCS#12 (certificado A1) para autenticação mTLS. O TLS 1.2 é o mínimo exigido pela SEFAZ.
 
+Internamente, o `SefazClient::new` carrega o certificado via `fiscal_crypto::load_certificate` e **assina automaticamente** os eventos XML (cancelamento, CC-e, manifestação, EPEC, etc.) antes de transmiti-los — cada `<evento>` individual em lotes também é assinado separadamente.
+
 ```rust
 use fiscal_sefaz::client::SefazClient;
 
 let pfx = std::fs::read("certificado.pfx").unwrap();
 let client = SefazClient::new(&pfx, "senha")?;
 ```
+
+<Callout type="info">
+Antes da migração RustCrypto (PR #51), os eventos eram enviados sem assinatura no `<infEvento>`, causando rejeição em produção.
+</Callout>
 
 Timeouts padrão:
 - **Conexão**: 30 segundos
