@@ -12,7 +12,7 @@
   "dependencies": {
     "@takumi-rs/image-response": "^0.71.7",
     "fumadocs-core": "16.6.16",
-    "fumadocs-mdx": "14.2.9",
+    "fumadocs-mdx": "15.0.13",
     "fumadocs-ui": "16.6.16",
     "lucide-react": "^0.577.0",
     "mermaid": "^11.13.0",
